@@ -1,0 +1,33 @@
+# Dependências declaradas (sem pin).
+# O requirements.txt COM VERSÕES TRAVADAS é gerado a partir daqui:
+#     pip install -r requirements.in && pip freeze > requirements.txt
+# Motivo: pickle/joblib é acoplado à versão da biblioteca — um modelo salvo em
+# scikit-learn 1.5 pode falhar (ou pior, se comportar diferente) em 1.7.
+
+# núcleo
+pandas
+numpy
+scikit-learn
+
+# modelagem
+torch                 # MLP — exigência da Fase 1
+
+# rastreabilidade
+mlflow
+
+# governança / fairness
+fairlearn
+shap                  # explicabilidade — requisito do Art. 20 da LGPD, não enfeite
+
+# API
+fastapi
+uvicorn[standard]
+pydantic
+
+# visualização
+matplotlib
+seaborn
+
+# qualidade
+pytest
+ruff

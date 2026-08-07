@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Dados derivados — reprodutíveis a partir de data/raw + src/
+data/processed/*
+!data/processed/.gitkeep
+
+# Artefatos de modelo — o Registry é a fonte de verdade, não o Git
+models/*
+!models/.gitkeep
+
+# MLflow local
+mlruns/
+mlartifacts/
+
+# Logs de inferência (contêm dados pessoais — LGPD)
+logs/
+*.jsonl
+
+# Notebooks: limpar saída antes de commitar
+.ipynb_checkpoints/
+
+# SO / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Segredos — nunca commitar
+.env
+*.pem
