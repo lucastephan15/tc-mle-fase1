@@ -229,15 +229,73 @@ features não gera valores infinitos"*), com ocorrência real neste dataset.
 
 ## 2. Preparação
 
+*Fechada em 10/08/2026.* Código: `src/config.py` (contrato de colunas), `src/data.py`
+(carregamento e partição), `src/preprocess.py` (o pipeline serializável).
+
 | Decisão | Escolha | Alternativa considerada | Por quê |
 |---|---|---|---|
-| Estratégia de split | | | |
-| Imputação numérica | | | |
-| Imputação categórica | | | |
-| Encoding | | | |
-| Escalonamento | | | |
-| Tratamento de desbalanceamento | | | |
-| Tratamento de outliers | | | |
+| **Estratégia de split** | **três** partições **60/20/20**, aleatórias e **estratificadas**, `seed=42` | treino/teste 80/20 (o que o runbook sugere) | três coisas já decididas exigem um conjunto de **validação fixo**: early stopping do MLP (Etapa 8), gate do CI (Etapa 9.5) e seleção entre algoritmos (Etapa 6). Reparticionar depois invalidaria toda a tabela mestra, porque os números deixariam de ser comparáveis |
+| **Conjunto de teste** | **intocado até o fim** — nenhuma decisão desta etapa o consultou | avaliar tudo no teste, como o enunciado da Aula 08 sugere | decidir repetidamente olhando o teste o converte em validação e ele deixa de estimar generalização. Registrado como divergência deliberada do material |
+| Imputação de `Total Charges` | **constante 0** | mediana (~R$ 1.400); remover as 11 linhas | o vazio é medição verdadeira (sem ciclo de faturamento). Mediana inventaria histórico de pagamento de forma plausível demais para ser notada; remover transferiria o caso para produção, onde ele existe |
+| Imputação das demais numéricas | **mediana** | média | robusta a outlier. Não há nulo no dataset — está no pipeline como defesa para o que a API receber |
+| Imputação categórica | **moda** | categoria "desconhecido" | idem: defesa para produção, no-op no treino |
+| **Encoding** | **`OneHotEncoder(handle_unknown="ignore")`, sem `drop`** | `get_dummies(drop_first=True)` (o que o runbook sugere) | duas divergências, a segunda com prova — ver abaixo |
+| Escalonamento | `StandardScaler` nas numéricas, **parametrizável** | escalar sempre | obrigatório para LogReg e MLP; indiferente para árvores. `construir_preprocessador(escalonar=False)` já existe para a Etapa 6 |
+| **Desbalanceamento** | **nenhum tratamento** | SMOTE; `class_weight="balanced"` | 26,5% não é severo, e ambos **descalibram a probabilidade** — o que quebra a ordenação da fila por `P(churn) × CLTV`. `balanced` foi medido e não agregou nada (ver §5) |
+| Outliers | **nada a fazer** | winsorização, corte por z-score | a Etapa 1 verificou: nenhuma numérica com \|z\| > 3. Registrado que foi **verificado**, não ignorado |
+| Tipos das numéricas | forçadas a **`float64`**, inclusive `Tenure Months` (int no arquivo) | manter o dtype original | inteiro em Python não representa nulo: um campo faltando na API viraria float e quebraria a validação de schema do MLflow. Erro que só apareceria em produção |
+
+### As duas divergências no encoding — a segunda com evidência
+
+**`get_dummies` → `OneHotEncoder`:** `get_dummies` não memoriza as categorias vistas no treino,
+logo não sobrevive à API. O `OneHotEncoder` guarda o vocabulário dentro do artefato — é o que
+transforma convenção implícita em contrato.
+
+**`drop_first=True` → sem `drop`:** testado antes de decidir. Com `drop="if_binary"` +
+`handle_unknown="ignore"`, uma categoria inédita é codificada como vetor de zeros — que é
+**exatamente o vetor da categoria dropada**:
+
+| Entrada | `drop="if_binary"` | sem `drop` |
+|---|---|---|
+| `Gender="Female"` | `[0.]` | `[1, 0]` |
+| `Gender="Male"` | `[1.]` | `[0, 1]` |
+| `Gender="Other"` (inédita) | `[0.]` ← **colide com "Female"** | `[0, 0]` ← distinto |
+
+Ou seja: com `drop`, um `Gender="Other"` chegando na API seria silenciosamente tratado como
+`"Female"`, com status 200 OK. A *dummy variable trap* que o `drop_first` evita é inofensiva sob a
+regularização L2 que o sklearn já aplica por padrão; a colisão não é. Coberto por
+`test_categoria_desconhecida_nao_colide_com_categoria_existente`.
+
+### A distinção que o gate da Etapa 2 costuma embaralhar
+
+O gate diz *"toda transformação que aprende parâmetro é ajustada só no treino"*. Correto, mas são
+**duas regras diferentes**, e confundi-las leva a decidir errado:
+
+| Regra | Contra o quê protege | Vale para |
+|---|---|---|
+| `fit` **só no treino** | **data leakage** | mediana do imputador, média/desvio do scaler, categorias do encoder — tudo que *aprende* dos dados |
+| estar **dentro do artefato serializado** | **training-serving skew** | *tudo*, inclusive o que não aprende nada |
+
+O `fillna(0)` do `Total Charges` é o caso que separa as duas: sendo constante, **não seria leakage
+nem se fosse aplicado antes do split** — mas está dentro do `Pipeline` mesmo assim, porque precisa
+viajar no artefato. Já a conversão de texto para número ficou **fora** do pipeline, em
+`carregar_bruto()`: ela é defeito do `.xlsx`, e na API o campo já chega tipado pelo Pydantic.
+
+### 🚨 O arquivo bruto está ORDENADO pelo alvo — descoberto por um teste que quebrou
+
+As **1.869 primeiras linhas são todos os churners**; as 5.174 seguintes, todos os não-churners.
+Zero mistura. Três consequências, agora fixadas em `test_arquivo_bruto_esta_ordenado_pelo_alvo`:
+
+1. Um split com `shuffle=False` daria **treino 100% churner e teste 100% não-churner**. Escapamos
+   pelo *default* do `train_test_split`, não por decisão consciente — agora é consciente e testada.
+2. 🎯 **Impacto direto na Etapa 9.5:** o "CI leve" recomendado treina num *subset minúsculo* via
+   `head()`. Aqui isso traz **uma classe só** e o `LogisticRegression` levanta
+   `ValueError: needs samples of at least 2 classes` — uma mensagem que não aponta para a causa.
+   O subset do CI tem de ser **estratificado**.
+3. Explorar a base com `df.head()` dá leitura completamente enviesada.
+
+> Foi este teste que cumpriu o critério do gate da Etapa 9.5 — *"pelo menos um dos testes já pegou
+> um erro de verdade"*. Ele não foi escrito sabendo do problema; ele **encontrou** o problema.
 
 ---
 
@@ -264,13 +322,102 @@ features não gera valores infinitos"*), com ocorrência real neste dataset.
 
 ## 5. Experimentos — tabela mestra
 
-> Toda linha deve corresponder a um run rastreável no MLflow.
+> Toda linha corresponde a um run rastreável no MLflow (backend `sqlite:///mlflow.db`,
+> experimento `churn-fase1`). **Todos os números são de VALIDAÇÃO** — o conjunto de teste
+> permanece intocado até o fim do projeto.
 
-| # | Run MLflow | Modelo | Features | Hiperparâmetros | Métrica primária (teste) | F1 | Precision | Recall | Gap treino-teste | Observação |
-|---|---|---|---|---|---|---|---|---|---|---|
-| 0 | | **Baseline** (chute na majoritária) | — | — | | — | — | — | — | piso absoluto |
-| 1 | | LogReg (MVP) | | | | | | | | baseline a bater |
-| | | | | | | | | | | |
+*Etapa 3 fechada em 10/08/2026.*
+
+| # | Run | Modelo | PR-AUC ⭐ | ROC-AUC | R@10% | R@20% | F1 | Brier | Gap PR-AUC | Custo mín. | Limiar |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 0 | `66494335` | **Chute na majoritária** | **0,2654** | 0,500 | 0,088 | 0,201 | 0,000 | 0,195 | −0,000 | R$ 64.170 | — |
+| 1 | `c15f8839` | **LogReg (MVP)** ✅ | **0,6623** | 0,850 | 0,289 | 0,524 | 0,618 | **0,133** | +0,033 | **R$ 31.092** | 0,22 |
+| 2 | `ce070deb` | LogReg `class_weight=balanced` | 0,6638 | 0,850 | 0,286 | 0,524 | 0,637 | 0,161 | +0,030 | R$ 31.138 | 0,54 |
+| — | `b1ff54a9` | *`Churn Score` da IBM (referência)* | *0,8824* | *0,949* | *0,377* | *0,655* | *0,595* | — | — | *R$ 16.802* | *0,65* |
+
+⭐ métrica primária · ✅ **baseline oficial da Etapa 3, o número a ser batido**
+
+### Leitura do baseline
+
+**O modelo bate o chute na majoritária?** Sim, com folga: PR-AUC **0,6623 × 0,2654** — 2,5× o
+piso. Um ganho dessa ordem descarta a hipótese "os dados não têm sinal".
+
+**Gap treino-validação = +0,033.** Pequeno: não há overfitting relevante numa LogReg com 19
+features e 4.225 amostras, o que era esperado. ⚠️ Vale repetir que este gap **não detectaria
+leakage** — se a contaminação atingisse treino e validação igualmente, ele continuaria bonito.
+Quem cobre esse flanco é a auditoria da Etapa 1 e o `test_colunas_de_leakage_fora_das_features`.
+
+**Recall@k precisa ser lido contra o teto estrutural.** Nos k% do topo cabem no máximo `k×N`
+clientes, então nenhum ranqueador pode capturar mais que `k / prevalência` dos churners. Com
+prevalência 26,54%, o teto de recall@10% é **0,377** e o de recall@20% é **0,754**. Logo:
+
+| | recall@10% | % do teto | recall@20% | % do teto |
+|---|---|---|---|---|
+| aleatório | 0,100 | 26,5% | 0,200 | 26,5% |
+| **LogReg** | **0,289** | **76,7%** | **0,524** | **69,6%** |
+| teto | 0,377 | 100% | 0,754 | 100% |
+
+Reportar "recall@10% = 0,289" sozinho faz um ranking decente parecer fraco. **76,7% do máximo
+matematicamente possível** é a leitura honesta.
+
+### A conta de negócio — a cadeia KPI da Etapa 0 fechada com número real
+
+Sobre os 1.409 clientes da validação, aos custos da Etapa 0 (FN R$ 194 · FP R$ 62):
+
+| Estratégia | Custo do erro | Comentário |
+|---|---|---|
+| Não abordar ninguém | **R$ 72.556** | 374 churners perdidos |
+| Abordar a base inteira | **R$ 64.170** | a "solução" do recall 100% — e ela é cara |
+| **LogReg, limiar 0,22** | **R$ 31.092** | **−52% sobre não fazer nada** |
+| *`Churn Score` da IBM* | *R$ 16.802* | *ver ressalva abaixo* |
+
+≈ **R$ 23 economizados por cliente por ciclo** sobre a melhor estratégia trivial. É este número
+que liga PR-AUC a reais, e é ele que deve aparecer no vídeo de 5 minutos.
+
+> Note que "abordar a base inteira" custa **R$ 64 mil** — mais caro que muitos supõem. É o
+> argumento concreto contra otimizar recall puro, que já havia sido antecipado na Etapa 0 e agora
+> tem número.
+
+### 🚨 O `Churn Score` da IBM não é benchmark — é gabarito vazado (confirmado)
+
+A Etapa 1 o barrou por *procedência opaca*. A suspeita agora está confirmada, com evidência:
+
+| Faixa de score | Não-churners | Churners |
+|---|---|---|
+| 0–50 | 536 | **0** |
+| 50–65 | 245 | 10 |
+| 65–80 | 254 | 143 |
+| 80–100 | **0** | 221 |
+
+**Nenhum não-churner passa de 80 e nenhum churner fica abaixo de 65** — zero exceções em 1.409
+linhas. Um score genuinamente preditivo não separa assim; isto é a assinatura de cálculo feito
+**com o desfecho já conhecido**. Consequências registradas:
+
+- o PR-AUC de 0,88 é **inatingível por construção** — não é meta, e usá-lo como referência de
+  qualidade levaria a concluir que o nosso modelo "falhou" quando ele não falhou;
+- confirma retroativamente que mantê-lo fora das features foi a decisão certa: com ele, o modelo
+  teria PR-AUC ~0,88 e **estaria prevendo o desfecho, não o risco**;
+- fica na tabela em *itálico*, como caso documentado de leakage, não como concorrente.
+
+### `class_weight="balanced"` foi medido e descartado
+
+A comparação decisiva não é o PR-AUC (0,6638 × 0,6623, diferença dentro do ruído) — é esta:
+
+| | limiar ótimo | custo mínimo | Brier (calibração) |
+|---|---|---|---|
+| LogReg | 0,22 | R$ 31.092 | **0,133** |
+| LogReg `balanced` | 0,54 | R$ 31.138 | 0,161 |
+
+`balanced` **chega ao mesmo custo** (R$ 46 de diferença, 0,15%) apenas **deslocando o limiar** de
+0,22 para 0,54 — faz por dentro do modelo o que o limiar já faz por fora. E cobra por isso: o
+Brier piora **21%**, isto é, a probabilidade fica descalibrada. Como a fila é ordenada por
+`P(churn) × CLTV`, uma probabilidade descalibrada corrompe a multiplicação — deixa de significar
+reais. **Descartado.**
+
+> Este é o argumento empírico para a decisão da Etapa 2 de não tratar desbalanceamento: em um
+> ranqueador, desbalanceamento é assunto de **limiar**, e limiar é **parâmetro de negócio**. Daí
+> a exigência já registrada de que a API devolva **probabilidade, não classe** — o gerente muda o
+> corte sem que ninguém retreine nada.
 
 ---
 
@@ -315,3 +462,13 @@ features não gera valores infinitos"*), com ocorrência real neste dataset.
 | 2026-08-10 | 1 | Geográficas **fora das features**, dentro da auditoria | cardinalidade inviável (4,3 clientes/CEP) **e** proxy de renda/raça. `Lat`/`Long` ficam em backlog como experimento controlado |
 | 2026-08-10 | 1 | `Total Charges` vazio → **imputar 0**, não mediana nem remoção | o vazio é medição verdadeira (sem ciclo de faturamento); mediana inventaria histórico; remoção transferiria o caso para produção |
 | 2026-08-10 | 1 | Feature de "reajuste de preço" **rejeitada antes de construir** | testada: razão com mediana 1,000 e sd 0,051, churn por quartil sem padrão. O dataset não carrega histórico de reajuste |
+| 2026-08-10 | 2 | Split em **três** partições (60/20/20), não duas | early stopping do MLP, gate do CI e seleção de algoritmos exigem validação fixa; reparticionar depois invalidaria a tabela mestra inteira |
+| 2026-08-10 | 2 | Conjunto de **teste intocado** até o fim; toda seleção na validação | divergência deliberada do enunciado da Aula 08: decidir repetidamente olhando o teste o converte em validação |
+| 2026-08-10 | 2 | `OneHotEncoder` **sem `drop`**, contra a recomendação usual de `drop_first` | com `drop`, categoria inédita vira o mesmo vetor da categoria dropada (`Gender="Other"` → `"Female"`), silenciosamente. A dummy trap é inofensiva sob L2; a colisão não é |
+| 2026-08-10 | 2 | **Nenhum tratamento de desbalanceamento** | 26,5% não é severo, e SMOTE/`class_weight` descalibram a probabilidade, quebrando a ordenação por `P(churn) × CLTV`. `balanced` foi medido: mesmo custo, Brier 21% pior |
+| 2026-08-10 | 2 | Numéricas forçadas a `float64`, inclusive `Tenure Months` | inteiro não representa nulo: campo faltando na API quebraria o schema enforcement do MLflow só em produção |
+| 2026-08-10 | 2 | MLflow com backend **SQLite**, não file store | o MLflow 3 pôs `./mlruns` em modo de manutenção e o Model Registry (Etapa 9) nunca funcionou sobre arquivos. Migrar agora evita mexer nos experimentos depois |
+| 2026-08-10 | 2 | Serialização via **skops** (padrão do MLflow 3), não pickle | skops não executa código arbitrário ao carregar — importa quando o artefato vem de um registry. Custo: declarar `skops_trusted_types=["numpy.dtype"]` |
+| 2026-08-10 | 3 | **Baseline oficial = LogReg simples**, PR-AUC 0,6623 na validação | 2,5× o piso de 0,2654; gap de 0,033 sem overfitting relevante. É o número que toda etapa seguinte precisa bater |
+| 2026-08-10 | 3 | `Churn Score` da IBM reclassificado de "benchmark" para **caso de leakage documentado** | nenhum não-churner acima de 80, nenhum churner abaixo de 65, zero exceções em 1.409 linhas: score calculado com o desfecho conhecido. PR-AUC 0,88 é inatingível por construção |
+| 2026-08-10 | 3 | Reportar recall@k **como % do teto estrutural** (`k / prevalência`) | recall@10% jamais passa de 0,377 nesta base; o número cru faz um ranking de 76,7% do máximo parecer fraco |

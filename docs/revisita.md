@@ -28,6 +28,11 @@ e se a revisita mudar uma decisão, a mudança vira linha no `decision-log.md`, 
 | 8 | M01-A08 (§1 EDA) | Investigar **por que fibra ótica churna 41,9% × DSL 19,0%** — contraintuitivo para o produto premium. Hipótese a testar: preço x expectativa de qualidade | 1, 4 | ⬜ |
 | 9 | M01-A08 (§1 EDA) | Decidir o destino de `Total Charges` dado que correlaciona **0,9996** com `Tenure × Monthly` — manter para árvores, remover para LogReg, ou manter e aceitar | 5 | ⬜ |
 | 10 | Enunciado FIAP | **Vídeo de 5 min (método STAR) vale 10%** e `pyproject.toml` + `Makefile` contam em qualidade de código (20%). Não são código — fáceis de esquecer | 11 | ⬜ |
+| 11 | M01-A08 (§2) | 🚨 O arquivo bruto está **ordenado pelo alvo** → o "subset minúsculo" do CI leve **tem de ser estratificado**, senão o treino recebe uma classe só e o erro do sklearn não aponta a causa | 9.5 | ⬜ |
+| 12 | M01-A08 (§3) | Congelar as **estatísticas de referência do treino** (`describe()` + frequências) junto do artefato — sem baseline não há drift a detectar depois | 9, 10 | ⬜ |
+| 13 | M01-A08 (§3) | O limiar de operação (**0,22** no baseline) é parâmetro de negócio: precisa ser **configurável na API**, não constante no código | 9 | ⬜ |
+| 14 | M01-A08 (§5) | Repetir a comparação com **validação cruzada estratificada** antes de declarar vencedor entre algoritmos — um split único não distingue ganho de variância | 6 | ⬜ |
+| 15 | M02 (a estudar) | Avaliar **calibração** (Platt / isotônica) explicitamente: a fila ordena por `P(churn) × CLTV`, então probabilidade descalibrada corrompe a ordenação | 6, 7 | ⬜ |
 
 ## Decisões tomadas sob incerteza — reavaliar se surgir informação
 
