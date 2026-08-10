@@ -301,12 +301,81 @@ Zero mistura. Três consequências, agora fixadas em `test_arquivo_bruto_esta_or
 
 ## 3. Features criadas
 
-| Feature | Hipótese de negócio | Disponível no momento da predição? | Ganho medido | Mantida? |
-|---|---|---|---|---|
-| | | ⬜ sim / ⬜ não | | |
+*Fechada em 10/08/2026.* Código: `src/features.py`, medição em `src/ablacao.py`.
 
-> A coluna "Disponível no momento da predição?" é obrigatória. Um "não" = descarte imediato,
-> por mais que a métrica melhore.
+**Resultado da etapa: nenhuma das 4 features entra no modelo v1.** Todas foram implementadas,
+medidas e descartadas por ausência de ganho. O código permanece testado e ligável por parâmetro
+(`--features`) para reavaliação na Etapa 8.
+
+| Feature | Hipótese de negócio | Disponível na predição? | Ganho medido (CV, PR-AUC) | Mantida? |
+|---|---|---|---|---|
+| `n_servicos_adicionais` | cada serviço a mais é um fio prendendo o cliente → **custo de troca** | ✅ sim — atributo de contrato | **+0,0001** | ❌ |
+| `tenure_faixa` (binning) | o risco despenca no 1º semestre e estabiliza; a LogReg só vê a reta | ✅ sim | **+0,0001** | ❌ |
+| `charge_por_servico` | pagar caro por pouco serviço gera insatisfação (custo-benefício) | ✅ sim | **−0,0010** | ❌ |
+| `pagamento_automatico` | débito automático é inércia a favor da empresa; pagamento manual é decisão mensal | ✅ sim | **+0,0001** | ❌ |
+
+*Ruído de referência: desvio entre folds = **0,0280**. Nenhum ganho chega a 1/20 disso.*
+
+**Duas candidatas cortadas antes de escrever código**, por serem redundantes **por construção**:
+`contrato_mensal` e `tem_fibra` — o `OneHotEncoder` de `Contract` e `Internet Service` já produz
+exatamente essas colunas.
+
+### Como o ganho foi medido — duas decisões metodológicas
+
+1. **Validação cruzada estratificada (5 folds) dentro do TREINO**, não na validação. Julgar cada
+   candidata olhando a validação a gastaria em cinco decisões — o mesmo problema que nos fez
+   manter o teste intocado, um andar acima. A validação segue reservada para a escolha final
+   entre modelos.
+2. **Ablação por remoção (leave-one-out)**, não por adição isolada. Adicionar uma feature sozinha
+   superestima sua contribuição quando ela é redundante com outra; medir quanto se **perde** ao
+   removê-la do conjunto completo responde a pergunta certa — *"agrega algo que as outras já não
+   dizem?"*.
+
+### 🔑 Por que falharam — o diagnóstico é mais útil que o resultado
+
+**Duas eram redundantes matematicamente, não por acaso.** `n_servicos_adicionais` é a **soma de 6
+dummies já presentes** no modelo; `pagamento_automatico` é o **agrupamento de 4 dummies já
+presentes**. Para um modelo linear, uma combinação linear de variáveis existentes não acrescenta
+grau de liberdade nenhum — a LogReg já podia representar exatamente aquilo. Isso era previsível
+antes de medir, e foi um erro de julgamento não tê-lo previsto.
+
+**A hipótese de salvação foi testada e também rejeitada.** O princípio da Aula 03 diz que FE
+depende do algoritmo alvo: uma árvore precisa de 6 splits sucessivos para "contar serviços",
+enquanto a contagem entrega isso num split. Rodamos a mesma ablação com **Random Forest**:
+
+| Modelo | base (19 features) | + as 4 novas | Δ |
+|---|---|---|---|
+| LogReg | 0,6868 ± 0,0236 | 0,6871 ± 0,0280 | **+0,0003** |
+| Random Forest | 0,6878 ± 0,0128 | 0,6811 ± 0,0137 | **−0,0067** |
+
+Na RF as features **pioram**, e cada remoção individual melhora. Mecanismo: features redundantes
+**diluem o sorteio de colunas em cada split** — a árvore passa a considerar cópias da mesma
+informação no lugar de variáveis informativas.
+
+**A conclusão de fundo amarra com a Etapa 1:** *feature engineering não cria informação, apenas
+reorganiza a existente.* A EDA já havia registrado que a maior limitação do dataset é
+**estrutural** — não há dados de uso nem de interação com o suporte, só atributos de contrato.
+A Etapa 4 confirma empiricamente aquela previsão: não há como derivar sinal que não está lá.
+Isso vai para as limitações do Model Card.
+
+### ⚠️ O split único teria dado a resposta errada
+
+Rodado na validação, o conjunto com features dá **PR-AUC 0,6690 contra 0,6623** — um ganho
+aparente de **+0,0067** que, olhado sozinho, levaria a incluir as quatro. Mas a CV já havia
+estimado o desvio entre folds em **0,0280**: o "ganho" cabe quatro vezes dentro do ruído.
+
+> É a provocação que o runbook reserva para a Etapa 6 (*"isso é sinal ou é variância do split?"*)
+> materializada uma etapa antes. **Uma observação contra cinco: ficamos com as cinco.** Registrado
+> porque é o argumento que sustenta usar CV em toda a Etapa 6.
+
+### 🚨 Achado técnico para a Etapa 9: o `FunctionTransformer` acopla o artefato ao código-fonte
+
+Serializar o pipeline com feature engineering falhou até declararmos
+`skops_trusted_types=["src.features.adicionar_features"]`. A causa importa mais que a correção:
+o artefato **carrega uma referência a uma função nossa**, logo o ambiente de inferência precisa
+ter `src.features` importável **no mesmo caminho**, senão o modelo não carrega. É a versão skops
+do problema clássico do pickle com funções customizadas — e é uma restrição real para o
+empacotamento da API e para o Dockerfile.
 
 ---
 
@@ -333,6 +402,7 @@ Zero mistura. Três consequências, agora fixadas em `test_arquivo_bruto_esta_or
 | 0 | `66494335` | **Chute na majoritária** | **0,2654** | 0,500 | 0,088 | 0,201 | 0,000 | 0,195 | −0,000 | R$ 64.170 | — |
 | 1 | `c15f8839` | **LogReg (MVP)** ✅ | **0,6623** | 0,850 | 0,289 | 0,524 | 0,618 | **0,133** | +0,033 | **R$ 31.092** | 0,22 |
 | 2 | `ce070deb` | LogReg `class_weight=balanced` | 0,6638 | 0,850 | 0,286 | 0,524 | 0,637 | 0,161 | +0,030 | R$ 31.138 | 0,54 |
+| 3 | `6ba7797f` | LogReg **+ 4 features** (Etapa 4) | 0,6690 | 0,853 | 0,286 | 0,529 | 0,617 | 0,133 | +0,030 | R$ 30.842 | 0,27 |
 | — | `b1ff54a9` | *`Churn Score` da IBM (referência)* | *0,8824* | *0,949* | *0,377* | *0,655* | *0,595* | — | — | *R$ 16.802* | *0,65* |
 
 ⭐ métrica primária · ✅ **baseline oficial da Etapa 3, o número a ser batido**
@@ -472,3 +542,8 @@ reais. **Descartado.**
 | 2026-08-10 | 3 | **Baseline oficial = LogReg simples**, PR-AUC 0,6623 na validação | 2,5× o piso de 0,2654; gap de 0,033 sem overfitting relevante. É o número que toda etapa seguinte precisa bater |
 | 2026-08-10 | 3 | `Churn Score` da IBM reclassificado de "benchmark" para **caso de leakage documentado** | nenhum não-churner acima de 80, nenhum churner abaixo de 65, zero exceções em 1.409 linhas: score calculado com o desfecho conhecido. PR-AUC 0,88 é inatingível por construção |
 | 2026-08-10 | 3 | Reportar recall@k **como % do teto estrutural** (`k / prevalência`) | recall@10% jamais passa de 0,377 nesta base; o número cru faz um ranking de 76,7% do máximo parecer fraco |
+| 2026-08-10 | 4 | Ganho de feature medido por **CV no treino**, não na validação | julgar 4 candidatas olhando a validação a gastaria, do mesmo modo que decidir no teste o gastaria. E a CV entrega o desvio entre folds, sem o qual não se distingue ganho de sorteio |
+| 2026-08-10 | 4 | Ablação por **remoção**, não por adição isolada | adicionar sozinha superestima a contribuição de feature redundante; a pergunta certa é "agrega algo que as outras não dizem?" |
+| 2026-08-10 | 4 | **Nenhuma das 4 features entra no modelo v1** | ganho de +0,0003 contra desvio de 0,0280 na LogReg, e **−0,0067 na Random Forest**. Duas delas eram combinações lineares de dummies já presentes — redundantes por construção, não por acaso |
+| 2026-08-10 | 4 | Código das features **mantido**, ligável por `--features` | é evidência de método para a banca e permite reavaliação barata na Etapa 8 (MLP). Caminho de código coberto por 7 testes |
+| 2026-08-10 | 4 | Ignorar o ganho de +0,0067 que aparece **na validação** | uma observação contra cinco da CV; o valor cabe 4× dentro do desvio entre folds. É o caso-teste do "isso é sinal ou variância do split?" |

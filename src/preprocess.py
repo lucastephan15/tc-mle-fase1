@@ -12,12 +12,14 @@ from __future__ import annotations
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.preprocessing import FunctionTransformer, OneHotEncoder, StandardScaler
 
-from src import config
+from src import config, features
 
 
-def construir_preprocessador(escalonar: bool = True) -> ColumnTransformer:
+def construir_preprocessador(
+    escalonar: bool = True, novas: list[str] | None = None
+) -> ColumnTransformer:
     """Monta o pré-processamento em três grupos de colunas.
 
     Os grupos existem porque o tratamento correto é diferente em cada um — não
@@ -55,18 +57,28 @@ def construir_preprocessador(escalonar: bool = True) -> ColumnTransformer:
         ("codificar", OneHotEncoder(handle_unknown="ignore", sparse_output=False)),
     ]
 
+    # As features da Etapa 4 entram nos mesmos grupos das originais — só a lista
+    # de colunas muda. Receber a lista (em vez de um booleano) é o que permite o
+    # estudo de ablação: ligar e desligar UMA de cada vez para medir a
+    # contribuição marginal de cada uma.
+    novas = novas or []
+    num = config.NUM + [c for c in features.NOVAS_NUM if c in novas]
+    cat = config.CAT + [c for c in features.NOVAS_CAT if c in novas]
+
     return ColumnTransformer(
         transformers=[
             ("zero", Pipeline(passos_zero), config.NUM_ZERO),
-            ("num", Pipeline(passos_num), config.NUM),
-            ("cat", Pipeline(passos_cat), config.CAT),
+            ("num", Pipeline(passos_num), num),
+            ("cat", Pipeline(passos_cat), cat),
         ],
         remainder="drop",  # nada entra por engano: o contrato é config.FEATURES
         verbose_feature_names_out=False,
     )
 
 
-def construir_pipeline(modelo, escalonar: bool = True) -> Pipeline:
+def construir_pipeline(
+    modelo, escalonar: bool = True, novas: list[str] | None = None
+) -> Pipeline:
     """Encadeia pré-processamento e modelo num único objeto.
 
     É este objeto que vai para o joblib/MLflow — nunca só o classificador. Salvar
@@ -74,7 +86,18 @@ def construir_pipeline(modelo, escalonar: bool = True) -> Pipeline:
     a API acaba reconstruindo o pré-processamento "na mão" de um jeito ligeiramente
     diferente do treino (training-serving skew).
     """
-    return Pipeline([
-        ("preproc", construir_preprocessador(escalonar=escalonar)),
+    passos = []
+    if novas:
+        # PRIMEIRO passo do Pipeline, antes de qualquer transformação. É isto que
+        # faz a feature engineering viajar dentro do joblib/MLflow: a API recebe
+        # o JSON cru e o próprio artefato deriva as colunas, exatamente como no
+        # treino. Sem isso, alguém teria de reimplementar a lógica dentro da API
+        # — e "quase igual" é o bastante para produzir predição errada com 200 OK.
+        passos.append(("features", FunctionTransformer(
+            features.adicionar_features, validate=False, feature_names_out=None,
+        )))
+    passos += [
+        ("preproc", construir_preprocessador(escalonar=escalonar, novas=novas)),
         ("modelo", modelo),
-    ])
+    ]
+    return Pipeline(passos)

@@ -29,7 +29,7 @@ from mlflow.models import infer_signature
 from sklearn.dummy import DummyClassifier
 from sklearn.linear_model import LogisticRegression
 
-from src import config, data, evaluate
+from src import config, data, evaluate, features
 from src.preprocess import construir_pipeline
 
 EXPERIMENTO = "churn-fase1"
@@ -86,6 +86,8 @@ def main() -> None:
     ap.add_argument("--modelo", default="logreg",
                     choices=["majoritaria", "logreg", "ibm_score"])
     ap.add_argument("--class-weight", default=None, choices=[None, "balanced"])
+    ap.add_argument("--features", action="store_true",
+                    help="liga as 4 features derivadas da Etapa 4")
     ap.add_argument("--tag", default="", help="rótulo livre para identificar o run")
     args = ap.parse_args()
 
@@ -99,6 +101,7 @@ def main() -> None:
     mlflow.set_experiment(EXPERIMENTO)
 
     nome_run = args.modelo + (f"-{args.class_weight}" if args.class_weight else "")
+    nome_run += "+feat" if args.features else ""
     with mlflow.start_run(run_name=nome_run + (f"-{args.tag}" if args.tag else "")):
         # Linhagem: dataset + commit + seed respondem "como reproduzo este número?"
         mlflow.set_tags({
@@ -111,7 +114,8 @@ def main() -> None:
             "modelo": args.modelo,
             "class_weight": args.class_weight or "none",
             "seed": config.SEED,
-            "n_features": len(config.FEATURES),
+            "n_features": len(config.FEATURES) + (4 if args.features else 0),
+            "features_etapa4": args.features,
             "n_treino": len(dados.treino),
             "n_validacao": len(dados.validacao),
         })
@@ -120,7 +124,8 @@ def main() -> None:
             scores = pontuar_ibm_score(dados)
         else:
             modelo, escalonar = construir_modelo(args.modelo, args.class_weight)
-            pipe = construir_pipeline(modelo, escalonar=escalonar)
+            novas = (features.NOVAS_NUM + features.NOVAS_CAT) if args.features else []
+            pipe = construir_pipeline(modelo, escalonar=escalonar, novas=novas)
             # fit SÓ no treino. Mediana do imputador, média/desvio do scaler e
             # categorias do encoder são aprendidas aqui e em nenhum outro lugar.
             pipe.fit(dados.treino.X, dados.treino.y)
@@ -140,7 +145,13 @@ def main() -> None:
                 # executa código arbitrário ao carregar, o que importa quando o
                 # artefato vem de um registry. Em troca, exige declarar os tipos
                 # não triviais. numpy.dtype vem dos dtypes do ColumnTransformer.
-                skops_trusted_types=["numpy.dtype"],
+                # 'src.features.adicionar_features' precisa ser declarada porque
+                # o FunctionTransformer carrega uma função NOSSA. Consequência que
+                # vale para a Etapa 9: o artefato fica ACOPLADO AO CÓDIGO-FONTE —
+                # o ambiente de inferência tem de ter `src.features` importável no
+                # mesmo caminho, senão o modelo não carrega. É a versão skops do
+                # problema clássico do pickle com funções customizadas.
+                skops_trusted_types=["numpy.dtype", "src.features.adicionar_features"],
             )
 
         resultados = {

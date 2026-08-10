@@ -33,6 +33,9 @@ e se a revisita mudar uma decisão, a mudança vira linha no `decision-log.md`, 
 | 13 | M01-A08 (§3) | O limiar de operação (**0,22** no baseline) é parâmetro de negócio: precisa ser **configurável na API**, não constante no código | 9 | ⬜ |
 | 14 | M01-A08 (§5) | Repetir a comparação com **validação cruzada estratificada** antes de declarar vencedor entre algoritmos — um split único não distingue ganho de variância | 6 | ⬜ |
 | 15 | M02 (a estudar) | Avaliar **calibração** (Platt / isotônica) explicitamente: a fila ordena por `P(churn) × CLTV`, então probabilidade descalibrada corrompe a ordenação | 6, 7 | ⬜ |
+| 16 | M01-A08 (§3 Etapa 4) | Reavaliar as 4 features com o **MLP** (`--features`). Expectativa baixa: a rede aprende interações sozinha, e elas já não ajudaram nem linear nem em árvore | 8 | ⬜ |
+| 17 | M01-A08 (§3 Etapa 4) | 🚨 O `FunctionTransformer` acopla o artefato ao código-fonte (`skops_trusted_types`). Se alguma FE entrar no modelo final, o **Dockerfile e a API precisam ter `src.features` importável no mesmo caminho** | 9 | ⬜ |
+| 18 | M01-A08 (§3 Etapa 4) | A RF *sem tuning* deu **0,6878** contra 0,6868 da LogReg — empate técnico. Não concluir nada disso na Etapa 6 sem tunar e sem CV repetida | 6 | ⬜ |
 
 ## Decisões tomadas sob incerteza — reavaliar se surgir informação
 
