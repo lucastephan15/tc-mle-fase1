@@ -18,7 +18,9 @@ from src import config, features
 
 
 def construir_preprocessador(
-    escalonar: bool = True, novas: list[str] | None = None
+    escalonar: bool = True,
+    novas: list[str] | None = None,
+    excluir: list[str] | None = None,
 ) -> ColumnTransformer:
     """Monta o pré-processamento em três grupos de colunas.
 
@@ -62,12 +64,17 @@ def construir_preprocessador(
     # estudo de ablação: ligar e desligar UMA de cada vez para medir a
     # contribuição marginal de cada uma.
     novas = novas or []
-    num = config.NUM + [c for c in features.NOVAS_NUM if c in novas]
-    cat = config.CAT + [c for c in features.NOVAS_CAT if c in novas]
+    # `excluir` remove a feature ORIGINAL inteira — não uma dummy solta. É a
+    # diferença entre reduzir a dimensão do modelo e reduzir o custo de coleta,
+    # validação e monitoramento em produção (ver decision log §4).
+    fora = set(excluir or [])
+    num = [c for c in config.NUM + [x for x in features.NOVAS_NUM if x in novas] if c not in fora]
+    cat = [c for c in config.CAT + [x for x in features.NOVAS_CAT if x in novas] if c not in fora]
+    zero = [c for c in config.NUM_ZERO if c not in fora]
 
     return ColumnTransformer(
         transformers=[
-            ("zero", Pipeline(passos_zero), config.NUM_ZERO),
+            ("zero", Pipeline(passos_zero), zero),
             ("num", Pipeline(passos_num), num),
             ("cat", Pipeline(passos_cat), cat),
         ],
@@ -77,7 +84,11 @@ def construir_preprocessador(
 
 
 def construir_pipeline(
-    modelo, escalonar: bool = True, novas: list[str] | None = None
+    modelo,
+    escalonar: bool = True,
+    novas: list[str] | None = None,
+    excluir: list[str] | None = None,
+    seletor=None,
 ) -> Pipeline:
     """Encadeia pré-processamento e modelo num único objeto.
 
@@ -96,8 +107,14 @@ def construir_pipeline(
         passos.append(("features", FunctionTransformer(
             features.adicionar_features, validate=False, feature_names_out=None,
         )))
-    passos += [
-        ("preproc", construir_preprocessador(escalonar=escalonar, novas=novas)),
-        ("modelo", modelo),
-    ]
+    passos.append(("preproc", construir_preprocessador(
+        escalonar=escalonar, novas=novas, excluir=excluir)))
+    if seletor is not None:
+        # ⛔ O seletor entra COMO PASSO DO PIPELINE, nunca aplicado antes ao
+        # dataset inteiro. Rodar SelectKBest fora daqui é o exemplo canônico de
+        # leakage: a escolha das colunas passa a ser informada pelos dados de
+        # teste, a métrica infla, e o gap treino-teste continua bonito porque os
+        # dois lados foram contaminados igual.
+        passos.append(("selecao", seletor))
+    passos.append(("modelo", modelo))
     return Pipeline(passos)

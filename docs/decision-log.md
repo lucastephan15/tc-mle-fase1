@@ -381,11 +381,157 @@ empacotamento da API e para o Dockerfile.
 
 ## 4. Seleção de features
 
-- **Método usado:**
-- **Por que esse método:**
-- **Nº de features antes → depois:**
-- **Features descartadas que surpreenderam:**
-- **Features com importância suspeitamente alta (investigadas?):**
+*Fechada em 10/08/2026.* Código: `src/selecao.py`.
+
+- **Nº de features: 19 → 13** (46 → 33 colunas pós one-hot)
+- **Método escolhido: ablação por remoção da feature ORIGINAL**, com CV estratificada de 5 folds
+  no treino — não `SelectKBest`, não `RFE`, não L1 (todos rodados e reportados abaixo)
+- **Ganho de performance: nenhum**, e isso é a conclusão, não uma falha
+
+### O enquadramento — o que a seleção está otimizando aqui
+
+Com **46 colunas e 4.225 amostras de treino (92 amostras por coluna)** não há pressão
+dimensional: nada obriga a podar. A seleção neste projeto não busca métrica, busca **custo
+operacional**, e o argumento vem da Etapa 10:
+
+> cada feature vigiada é uma chance a mais de alerta falso de drift (80 features a 5% produzem
+> ~4 alertas espúrios por rodada → fadiga de alerta), e cada feature coletada precisa ser
+> obtida, validada e mantida no CRM.
+
+### 🔑 A distinção que muda o desenho do experimento
+
+Selecionar **depois** do one-hot não é selecionar features. Se o `SelectKBest` descartar a dummy
+`Payment Method_Mailed check` e mantiver as outras três, **a coluna `Payment Method` continua
+tendo que ser coletada, validada e monitorada**. Reduziu-se a dimensão do modelo, não o custo
+operacional. Por isso o experimento foi feito nos **dois níveis**, e a decisão saiu do segundo.
+
+### Nível 1 — os três tipos da Aula 03, sobre as 46 colunas
+
+Referência: 46 colunas → **PR-AUC 0,6868 ± 0,0236**
+
+| Tipo | Método | k | PR-AUC | Δ |
+|---|---|---|---|---|
+| Filtro | `SelectKBest(f_classif)` | 10 | 0,6648 | −0,0219 |
+| Filtro | `SelectKBest(f_classif)` | 20 | 0,6692 | −0,0175 |
+| Filtro | `SelectKBest(f_classif)` | 30 | 0,6743 | −0,0124 |
+| Wrapper | `RFE` | 10 | 0,6568 | −0,0300 |
+| Wrapper | `RFE` | 20 | 0,6790 | −0,0078 |
+| Embedded | L1 (C=0,05) | — | 0,6858 | −0,0010 |
+
+**Todos pioram.** O filtro é o pior justamente onde o runbook avisa: `f_classif` avalia **uma
+coluna de cada vez** e é cego a interação, então descarta dummies que só fazem sentido em par.
+O embedded (L1) é o único que empata — coerente, porque ele decide **durante** o treino, com o
+modelo inteiro à vista.
+
+### Nível 2 — ablação por feature original (a que decidiu)
+
+| Feature | Perda ao remover | |
+|---|---|---|
+| `Dependents` | **+0,0221** | a mais importante do dataset |
+| `Tenure Months` | +0,0095 | |
+| `Paperless Billing` | +0,0059 | |
+| `Contract` | +0,0025 | |
+| *(demais)* | < 0,0025 | dentro do ruído |
+| **6 features** | **≤ 0** | remover melhora ou não muda |
+
+⚠️ **Honestidade sobre o ruído:** exceto `Dependents`, **todas as diferenças individuais estão
+dentro do desvio entre folds (0,0236)**. Nenhuma feature isolada pode ser declarada descartável
+com base no seu próprio número. O que decidiu foi o teste **em conjunto**:
+
+| Conjunto | PR-AUC | ±dp | Δ |
+|---|---|---|---|
+| 19 features (referência) | 0,6868 | 0,0236 | — |
+| **13 — sem as 6 não-sensíveis** ✅ | **0,6912** | **0,0163** | +0,0044 |
+| 10 — sem as 6 + os 3 sensíveis | 0,6912 | 0,0184 | +0,0044 |
+| 16 — sem só os 3 sensíveis | 0,6887 | 0,0208 | +0,0019 |
+
+**Escolhida a de 13.** Mesma performance com 6 colunas a menos — e o **menor desvio entre folds
+de todas as variantes** (0,0163 contra 0,0236), isto é, um modelo mais estável, não só mais
+enxuto. Na validação: PR-AUC 0,6646 contra 0,6623 do modelo de 19 — equivalente, como a CV previu.
+
+**Removidas:** `Phone Service`, `Online Backup`, `Device Protection`, `Streaming TV`,
+`Streaming Movies`, `Payment Method`.
+
+### 🚨 `Payment Method` sai sem custo — e a explicação é correlação espúria
+
+A EDA havia registrado `Electronic check` com **45,3% de churn** contra ~16% dos pagamentos
+automáticos: um dos sinais mais fortes do dataset. Que ele saia sem custo exigia explicação, e a
+tabela cruzada dá:
+
+| Payment Method | Mês-a-mês | 1 ano | 2 anos |
+|---|---|---|---|
+| **Electronic check** | **78%** | 15% | 7% |
+| Bank transfer (automatic) | 38% | 25% | 37% |
+| Credit card (automatic) | 36% | 26% | 38% |
+
+**78% dos clientes de `Electronic check` estão em contrato mês-a-mês.** O que parecia efeito da
+forma de pagamento é, em boa parte, o efeito do **tipo de contrato** — que já está no modelo via
+`Contract`. É o caso do catálogo (*"pacientes do médico X têm mais readmissões"*, quando o médico
+X atende os casos graves), agora com número próprio. A variável não deixou de correlacionar com
+churn; ela deixou de **acrescentar** informação.
+
+### Atributos sensíveis — decisão deliberadamente adiada
+
+`Gender`, `Senior Citizen` e `Partner` também aparecem como removíveis, e **removê-los custa
+exatamente zero** (as variantes de 13 e de 10 dão o mesmo 0,6912). Mesmo assim **ficam na v1**:
+
+- a escolha entre *"dentro das features"* e *"fora, guardados ao lado para auditar"* depende do
+  resultado da auditoria de fairness, que só existe na Etapa 10.5. **Decisão de governança não se
+  toma sem o dado da governança** — e o runbook é explícito em que essa não é decisão do
+  engenheiro sozinho;
+- como o custo de mantê-los é nulo, não há pressa técnica que justifique antecipar.
+
+> 🔑 **Achado que vale para a Etapa 10.5:** `Senior Citizen` tem sinal real e forte (churn de
+> 41,7% × 23,6%), e ainda assim **removê-lo não custa performance**. A única leitura possível é
+> que o modelo **reconstrói a informação por proxies** (`Contract`, `Dependents`,
+> `Monthly Charges`). Isto é *fairness through unawareness* demonstrado empiricamente neste
+> dataset: tirar a coluna não tiraria o viés — tiraria apenas a capacidade de medi-lo.
+
+### ⛔ O GATE da etapa, testado em vez de afirmado
+
+A seleção entra **como passo do `Pipeline`**, ajustada dentro de cada fold. Para medir o custo de
+fazer errado, rodamos `SelectKBest` **ajustado sobre o dataset inteiro** antes da CV:
+
+| | PR-AUC |
+|---|---|
+| seleção dentro do pipeline (correto) | 0,6636 |
+| seleção fora do pipeline (vazada) | 0,6635 |
+| **inflação** | **−0,0000** |
+
+**Não inflou nada — e a explicação importa mais que o número.** Com 4.225 amostras e 46 colunas a
+seleção é **estável**: qualquer 80% dos dados elege praticamente as mesmas colunas, então ver o
+alvo inteiro não muda a escolha. O leakage do seletor só morde quando a seleção é **instável**,
+isto é, quando `p >> n`.
+
+Para não deixar a regra como dogma não verificado, reproduzimos o regime onde ela morde —
+**300 amostras e 500 colunas de ruído puro**, nenhuma com qualquer relação com o alvo:
+
+| | PR-AUC |
+|---|---|
+| prevalência (o piso honesto) | 0,2533 |
+| seleção dentro do pipeline | 0,3402 |
+| **seleção fora do pipeline** | **0,7167** |
+| **inflação sobre puro ruído** | **+0,3766** |
+
+O modelo "prevê" com PR-AUC 0,72 a partir de **colunas aleatórias**. Todo esse desempenho é
+artefato de a seleção ter visto o alvo inteiro.
+
+> ⚠️ A conclusão **não** é "pode selecionar fora do pipeline quando há muitas amostras". É que o
+> custo de fazer certo é zero, a magnitude do erro depende do regime, e o pipeline é necessário de
+> qualquer forma para a API. Mas medir a própria armadilha em vez de citá-la é o que separa
+> conhecer a regra de entender o mecanismo.
+
+### Efeito cascata: a Etapa 5 deixou órfãs 3 das 4 features da Etapa 4
+
+Remover 6 colunas retirou o insumo de três features derivadas: `n_servicos_adicionais` (4 dos 6
+serviços que ela somava saíram), `charge_por_servico` (dependia da contagem) e
+`pagamento_automatico` (`Payment Method` saiu). Sobreviveu apenas `tenure_faixa` — não por acaso,
+a única que não era combinação linear de colunas já presentes.
+
+Código órfão removido, e um teste novo
+(`test_features_derivadas_nao_dependem_de_coluna_removida`) trava a cascata. Registrado em vez de
+apagado porque **uma decisão posterior pode invalidar código anterior**, e o encadeamento é o que
+o decision log existe para preservar.
 
 ---
 
@@ -403,9 +549,11 @@ empacotamento da API e para o Dockerfile.
 | 1 | `c15f8839` | **LogReg (MVP)** ✅ | **0,6623** | 0,850 | 0,289 | 0,524 | 0,618 | **0,133** | +0,033 | **R$ 31.092** | 0,22 |
 | 2 | `ce070deb` | LogReg `class_weight=balanced` | 0,6638 | 0,850 | 0,286 | 0,524 | 0,637 | 0,161 | +0,030 | R$ 31.138 | 0,54 |
 | 3 | `6ba7797f` | LogReg **+ 4 features** (Etapa 4) | 0,6690 | 0,853 | 0,286 | 0,529 | 0,617 | 0,133 | +0,030 | R$ 30.842 | 0,27 |
+| 4 | `aedc361b` | **LogReg, 13 features** (Etapa 5) ✅ | **0,6646** | 0,847 | 0,278 | 0,516 | 0,599 | — | +0,031 | R$ 31.750 | 0,29 |
 | — | `b1ff54a9` | *`Churn Score` da IBM (referência)* | *0,8824* | *0,949* | *0,377* | *0,655* | *0,595* | — | — | *R$ 16.802* | *0,65* |
 
-⭐ métrica primária · ✅ **baseline oficial da Etapa 3, o número a ser batido**
+⭐ métrica primária · ✅ **modelo de referência corrente** (run 1 é o baseline da Etapa 3;
+run 4 é o mesmo modelo com 13 features, adotado na Etapa 5 por custo operacional, não por métrica)
 
 ### Leitura do baseline
 
@@ -547,3 +695,9 @@ reais. **Descartado.**
 | 2026-08-10 | 4 | **Nenhuma das 4 features entra no modelo v1** | ganho de +0,0003 contra desvio de 0,0280 na LogReg, e **−0,0067 na Random Forest**. Duas delas eram combinações lineares de dummies já presentes — redundantes por construção, não por acaso |
 | 2026-08-10 | 4 | Código das features **mantido**, ligável por `--features` | é evidência de método para a banca e permite reavaliação barata na Etapa 8 (MLP). Caminho de código coberto por 7 testes |
 | 2026-08-10 | 4 | Ignorar o ganho de +0,0067 que aparece **na validação** | uma observação contra cinco da CV; o valor cabe 4× dentro do desvio entre folds. É o caso-teste do "isso é sinal ou variância do split?" |
+| 2026-08-10 | 5 | Seleção por **ablação de feature original**, não por `SelectKBest`/`RFE` sobre as dummies | podar dummy não reduz custo de coleta: a coluna-mãe continua tendo de ser obtida, validada e monitorada. Os 3 métodos clássicos foram rodados e todos pioraram |
+| 2026-08-10 | 5 | **19 → 13 features**, removendo 6 | performance equivalente (0,6912 × 0,6868 na CV) com o **menor desvio entre folds** (0,0163). A justificativa é custo operacional e menos superfície de drift, não métrica — e está escrita assim |
+| 2026-08-10 | 5 | `Payment Method` removida apesar do sinal forte na EDA | 78% dos `Electronic check` são mês-a-mês: o sinal já está em `Contract`. Correlação espúria confirmada com tabela cruzada |
+| 2026-08-10 | 5 | Atributos sensíveis **mantidos**, decisão adiada para a Etapa 10.5 | removê-los custa zero, mas a escolha depende do resultado da auditoria de fairness — decisão de governança não se toma sem o dado da governança |
+| 2026-08-10 | 5 | Gate de leakage do seletor **medido**, não só afirmado | inflação de 0,0000 neste dataset (seleção estável com 4.225 amostras) × **+0,3766 sobre puro ruído** em regime `p >> n`. A regra continua valendo; agora o mecanismo está entendido |
+| 2026-08-10 | 5 | Features órfãs da Etapa 4 **removidas do código** | a remoção de 6 colunas tirou o insumo de 3 das 4 derivadas. Registrado o encadeamento em vez de apagado, com teste que trava a cascata |

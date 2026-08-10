@@ -47,18 +47,16 @@ def test_funcao_e_pura(bruto):
     pd.testing.assert_frame_equal(entrada, antes)
 
 
-def test_contagem_de_servicos_no_intervalo_valido(bruto):
-    s = features.adicionar_features(bruto[config.FEATURES])["n_servicos_adicionais"]
-    assert s.between(0, len(features.SERVICOS_ADICIONAIS)).all()
-    assert (s == 0).any(), "clientes sem nenhum adicional existem e são os de maior risco"
+def test_features_derivadas_nao_dependem_de_coluna_removida(bruto):
+    """Trava contra a cascata que já aconteceu uma vez.
 
-
-def test_charge_por_servico_nunca_e_infinito(bruto):
-    """O +1 no denominador existe para isto: clientes com zero serviços
-    adicionais existem, e sem o +1 produziriam divisão por zero — a mesma
-    armadilha do inf que a Etapa 1 documentou com 'Tenure Months'."""
+    A Etapa 5 removeu 6 colunas do modelo e deixou órfãs 3 das 4 features da
+    Etapa 4 — elas somavam ou liam colunas que deixaram de ser coletadas. Este
+    teste garante que toda feature derivada sobrevivente se apoia apenas em
+    colunas que continuam em `config.FEATURES`.
+    """
     X = features.adicionar_features(bruto[config.FEATURES])
-    assert np.isfinite(X["charge_por_servico"]).all()
+    assert set(TODAS).issubset(X.columns), "alguma derivada perdeu seu insumo"
 
 
 def test_nenhuma_feature_derivada_gera_nan(bruto):
