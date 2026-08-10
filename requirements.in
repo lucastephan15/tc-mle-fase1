@@ -8,6 +8,9 @@
 pandas
 numpy
 scikit-learn
+openpyxl              # leitura do .xlsx — dependência OPCIONAL do pandas: existia no
+                      # Python do sistema e faltava no venv limpo. O "funciona na minha
+                      # máquina" clássico, pego pela primeira execução em ambiente isolado.
 
 # modelagem
 torch                 # MLP — exigência da Fase 1
