@@ -18,12 +18,16 @@ e se a revisita mudar uma decisão, a mudança vira linha no `decision-log.md`, 
 
 | # | Aula / origem | O que revisitar | Etapa afetada | Status |
 |---|---|---|---|---|
-| 1 | M01-A08 | Confirmar as previsões feitas **antes** de abrir o dataset: ~7.043 × 21 linhas/colunas · churn ≈ 26,5% · `TotalCharges` como texto com ~11 vazios · `customerID` a descartar | 1 | ⬜ |
+| 1 | M01-A08 | ~~Confirmar previsões feitas antes de abrir o dataset~~ → **4/4 acertadas** (7.043 linhas · churn 26,54% · `Total Charges` texto com 11 vazios · `CustomerID` descartável). Errei só o nº de colunas: 33, não 21 — é a variante estendida da IBM | 1 | ✅ |
 | 2 | M02 (a estudar) | Algoritmos e técnicas de validação novas → candidatos para a Etapa 6 | 6, 7 | ⬜ |
 | 3 | M02 (a estudar) | Conteúdo de redes neurais → arquitetura e regularização do MLP | 8 | ⬜ |
 | 4 | M03 (a estudar) | Padrões de modularização, testes e clean code → **refatoração esperada** de `src/` | Fase 1, 9.5 | ⬜ |
 | 5 | M04 (a estudar) | FastAPI a fundo → construir a API só depois deste módulo | 9 | ⬜ |
 | 6 | M05 (a estudar) | Empacotamento e SDK → como distribuir o pipeline como biblioteca | 9, 11 | ⬜ |
+| 7 | M01-A08 (§1 EDA) | Testar `Latitude`/`Longitude` como **experimento controlado**: performance E disparidade, com e sem. Escapam da cardinalidade (são contínuas), não da objeção ética | 4, 10.5 | ⬜ |
+| 8 | M01-A08 (§1 EDA) | Investigar **por que fibra ótica churna 41,9% × DSL 19,0%** — contraintuitivo para o produto premium. Hipótese a testar: preço x expectativa de qualidade | 1, 4 | ⬜ |
+| 9 | M01-A08 (§1 EDA) | Decidir o destino de `Total Charges` dado que correlaciona **0,9996** com `Tenure × Monthly` — manter para árvores, remover para LogReg, ou manter e aceitar | 5 | ⬜ |
+| 10 | Enunciado FIAP | **Vídeo de 5 min (método STAR) vale 10%** e `pyproject.toml` + `Makefile` contam em qualidade de código (20%). Não são código — fáceis de esquecer | 11 | ⬜ |
 
 ## Decisões tomadas sob incerteza — reavaliar se surgir informação
 

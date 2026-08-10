@@ -80,7 +80,7 @@ Prova real de reprodutibilidade: clonar numa máquina limpa e obter **o número 
 | Etapa | Estado |
 |---|---|
 | 0 · Enquadramento do problema | ✅ concluída — `docs/decision-log.md` §0 |
-| 1 · Data Understanding (EDA) | ⬜ |
+| 1 · Data Understanding (EDA) | ✅ concluída — `docs/decision-log.md` §1 · `notebooks/01_eda.py` |
 | 2 · Data Preparation | ⬜ |
 | 3 · Baseline / MVP | ⬜ |
 | 4-8 · FE → seleção → comparação → tuning → MLP | ⬜ |

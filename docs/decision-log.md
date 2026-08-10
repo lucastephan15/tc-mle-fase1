@@ -112,35 +112,118 @@ está declarada aqui em vez de escondida.
 
 ## 1. Dados
 
-**Fonte / versão do dataset:**
+*Fechada em 10/08/2026.*
 
-**Dimensões (linhas × colunas):**
+**Fonte / versão:** `Telco_customer_churn.xlsx` — **variante estendida** da IBM (IBM Cognos
+Analytics sample), não o CSV de 21 colunas mais difundido no Kaggle.
+**SHA-256:** `1bcbc0ccc9b352175216979102628e579cfbde2c3ff57b005de168a433122640`
+**Dimensões:** **7.043 linhas × 33 colunas**
+**Taxa de churn:** **26,54%** (1.869 churners) → desbalanceado, mas **não severo**
+**Baseline de chance:** chutar sempre "No" dá **73,46% de acurácia** — o piso contra o qual todo
+resultado deve ser lido.
+
+> 📌 **Por que a variante estendida, sendo que ela vem com colunas contaminadas:** precisamente
+> por isso. Um dataset já limpo não permite demonstrar caça a leakage; a tabela abaixo é
+> evidência de método. O enunciado exige ≥5.000 registros e ≥10 features — cumprido com folga.
 
 ### Colunas descartadas por suspeita de leakage
+
 | Coluna | Por que suspeita | Decisão | Justificativa |
 |---|---|---|---|
-| | | | |
+| **`Churn Reason`** | preenchida em **1.869** linhas, nula em **5.174** — exatamente churners × não-churners | ⛔ **descartar** | `notna()` prediz o alvo com **100% de acerto**. O motivo do cancelamento só existe *depois* do cancelamento. Leakage absoluto |
+| **`Churn Score`** | não-churners: média 50 (máx **80**) · churners: média 82,5 (mín **65**) | ⛔ **descartar como feature** → 🎯 **usar como benchmark** | Duplo problema: (a) usá-la seria **prever o modelo da IBM**, não churn — destilação acidental, com teto de performance igual ao deles; (b) procedência desconhecida — se foi calculada retrospectivamente, é leakage puro |
+| **`CLTV`** | valor calculado pela operadora, método desconhecido | ⛔ **fora do treino** → 🎯 **usar na ordenação da fila** | Diferença entre grupos é pequena (4.491 × 4.149), mas a procedência é opaca. Ganha uso melhor: ordenar a fila por **P(churn) × valor do cliente**, ligando a saída do modelo à conta de R$ 194 da Etapa 0 |
+| `Churn Label` / `Churn Value` | — | alvo | `Churn Value` é o alvo (0/1); `Churn Label` é o mesmo em texto |
+| `CustomerID` | identificador | ⛔ descartar | sem poder preditivo + **dado pessoal** (LGPD). A mesma linha serve às duas regras |
+| `Count`, `Country`, `State` | **1 único valor** cada | ⛔ descartar | variância zero — todos os clientes são da Califórnia |
+| `Lat Long` | string redundante | ⛔ descartar | já está em `Latitude` + `Longitude` |
+
+> 🔑 **O critério aplicado, escrito uma vez:** uma coluna sai porque a informação **não estaria
+> disponível no momento real da predição** ou porque **codifica o desfecho**. Não sai por ser
+> "extra" nem por complexidade. Nada foi apagado — `data/raw` é imutável e toda decisão é
+> reversível.
+
+### Geográficas — decisão e trade-off registrado
+
+`City` (1.129 valores) · `Zip Code` (1.652) · `Latitude`/`Longitude`.
+
+**Decisão: fora das features na v1, dentro da auditoria de fairness.** Dois motivos independentes:
+
+1. **Técnico (decisivo):** 1.652 CEPs em 7.043 linhas = **4,3 clientes por CEP**. One-hot geraria
+   1.652 colunas; target encoding com 4 amostras por categoria vaza por construção.
+2. **Ético:** CEP é o exemplo canônico de **proxy de renda e raça** (categoria socioeconômica).
+   Usá-lo como feature impede distinguir *"aqui o sinal é ruim"* de *"aqui as pessoas são pobres"*.
+
+⚠️ **Nuance registrada:** `Latitude`/`Longitude` são **contínuas** e escapam do problema de
+cardinalidade — árvores cortam o espaço geográfico sem explodir dimensão. Sobrevivem à objeção
+técnica, não à ética. **Backlog:** testá-las como experimento controlado, medindo performance
+**e** disparidade com/sem. Vira seção de documentação de alto valor.
 
 ### Cobertura das 4 categorias de variáveis
-> Forçar cobertura para não pender só para o demográfico. Em churn, as **comportamentais**
-> são as mais preditivas.
 
-| Categoria | Variáveis disponíveis no dataset | Faltam / seria bom ter |
+| Categoria | Disponíveis no dataset | Faltam / seria bom ter |
 |---|---|---|
-| Demográficas | | |
-| **Comportamentais** ⭐ | | |
-| Históricas | | |
-| Contextuais | | |
+| Demográficas | `Gender`, `Senior Citizen`, `Partner`, `Dependents` | renda, idade exata (só há o binário sênior) |
+| **Comportamentais** ⭐ | `Tenure Months`, 9 flags de serviço (`Online Security`, `Tech Support`, `Streaming*`…), `Contract`, `Paperless Billing`, `Payment Method`, `Monthly Charges` | 🚨 **consumo real (GB, minutos), nº de chamadas ao suporte, mudanças de plano** — os preditores mais fortes em churn real |
+| Históricas | `Total Charges` (acumulado) | 🚨 **reclamações anteriores, atrasos de pagamento, upgrades/downgrades, histórico de reajuste** |
+| Contextuais | geográficas (fora das features) | **cobertura de sinal na região, ofertas da concorrência, sazonalidade** |
+
+> 🚨 **A maior limitação do dataset, e ela é estrutural:** não há **dados de uso** nem de
+> **interação com o suporte**. Em churn de telecom real, "ligou 3 vezes no suporte no último mês"
+> costuma ser o preditor mais forte que existe. O que temos são **atributos de contrato**, não de
+> comportamento dinâmico. Isso limita o teto de performance alcançável e **deve constar nas
+> limitações do Model Card**.
 
 ### Achados relevantes do EDA
-| Achado | Implicação para a modelagem |
-|---|---|
-| | |
+
+| Achado | Número | Implicação para a modelagem |
+|---|---|---|
+| **`Contract` é o driver dominante** | mês-a-mês **42,7%** × 2 anos **2,8%** (amplitude **39,9 pp**) | confirma o preditor clássico de churn; flag `contrato_mensal` na Etapa 4 |
+| **`Tenure` é fortemente não-linear** | 0-6m: **52,9%** → 6-12m: 35,9% → 1-2a: 28,7% → 2-4a: 20,4% → 4a+: **9,5%** | **binning ajuda muito LogReg e MLP** (entregam a não-linearidade de mão beijada); redundante para árvores |
+| **Fibra ótica churna mais que DSL** | fibra **41,9%** × DSL 19,0% | contraintuitivo (é o produto premium) — hipótese: preço mais alto ou expectativa de qualidade não atendida. **Investigar antes de assumir** |
+| **`Electronic check` dispara churn** | **45,3%** × ~16% nos pagamentos automáticos | pagamento manual = menos fricção para sair. Débito automático prende |
+| **Serviços de valor agregado retêm** | sem `Online Security` 41,8% × com 14,6%; sem `Tech Support` 41,6% × com 15,2% | candidato a feature agregada: nº de serviços adicionais contratados |
+| ⭐ **`Senior Citizen` tem prevalência muito diferente** | **41,7%** × 23,6% (**18,1 pp**) | 🎯 **crítico para a Etapa 10.5** — ver nota abaixo |
+| **`Gender` não prediz nada** | 26,9% × 26,2% (**0,7 pp**) | ainda assim **deve ser auditado**: ausência de sinal ≠ ausência de disparidade nas *saídas* |
+| **`Dependents` é forte** | sem 32,6% × com 6,5% (26,1 pp) | — |
+| **Sem outliers univariados** | nenhuma numérica com \|z\| > 3 | não haverá etapa de tratamento de outlier; registrar que foi verificado |
+| **`Total Charges` é redundante** | correlação **0,9996** com `Tenure × Monthly`, erro mediano 2% | multicolinearidade clássica — atrapalha LogReg, indiferente para árvores. Decidir na Etapa 5 |
+| Correlações lineares modestas | `Tenure` −0,352 · `Monthly` +0,193 · `TC` −0,198 | nenhuma variável isolada resolve; o sinal está nas **combinações** — argumento a favor do MLP |
+
+> ⭐ **A prevalência de 41,7% × 23,6% entre idosos e não-idosos é o achado mais consequente da
+> EDA, e não é sobre performance.** Quando a **prevalência real difere entre grupos**, paridade
+> demográfica, equalized odds e calibração tornam-se **matematicamente incompatíveis** (teorema de
+> impossibilidade — Kleinberg, Chouldechova). Ou seja: **não existe escolher "ser justo" neste
+> dataset** — só escolher *qual* definição de justiça otimizar, sabendo que isso sacrifica as
+> outras. A Etapa 10.5 tem de declarar qual foi escolhida e por quê. Isto deixa de ser teoria da
+> Aula 07 e passa a ser um número próprio.
 
 ### Zeros e vazios investigados (armadilha do rótulo censurado)
-| Coluna | O zero/vazio é medição ou ausência de medição? | Tratamento |
+
+| Coluna | O vazio é medição ou ausência de medição? | Tratamento |
 |---|---|---|
-| | | |
+| **`Total Charges`** (11 casos, todos com `Tenure Months = 0`) | **é medição verdadeira** — o cliente pagou zero porque **não houve ciclo de faturamento**, não porque o dado se perdeu | **imputar `0`**. ⛔ **Não** imputar mediana (~R$ 1.400): inventaria histórico de pagamento para quem nunca foi faturado, e de forma plausível o bastante para passar despercebido. ⛔ **Não** remover as linhas: clientes com `tenure = 0` **existem em produção** — apagá-los do treino não elimina o caso, transfere para a API |
+| `"No internet service"` / `"No phone service"` | terceira categoria legítima nas flags de serviço | **manter como categoria**, não converter em nulo — carrega informação real (churn de 7,4%, o mais baixo do dataset) |
+
+> ℹ️ **Não é preciso criar flag `cliente_novo`:** `Tenure Months = 0` já é a flag. A informação
+> não se perde com a imputação por zero.
+
+### Hipótese testada e REJEITADA
+
+**Hipótese:** `Total Charges / Tenure` (cobrança média histórica) versus `Monthly Charges` atual
+revelaria **reajuste de preço** — cliente que sofreu aumento cancelaria mais.
+
+**Resultado:** a razão tem mediana **1,000** e desvio-padrão **0,051**; o churn por quartil é
+25,6% / 32,9% / 20,8% / 24,9% — **sem padrão monotônico**. O dataset é estático demais para
+carregar histórico de reajuste. **Feature descartada antes de ser construída.**
+
+> Registrado deliberadamente: hipótese testada e rejeitada **é resultado**, e responde à
+> provocação do runbook — *"você vai medir o ganho dessa feature ou só assumir que ajudou?"*.
+
+⚠️ **Mas a divisão sobrevive como armadilha:** qualquer feature com `Tenure Months` no
+denominador produz `inf` nas 11 linhas com tenure zero. **Isso vira teste unitário obrigatório
+no CI** (Etapa 9.5) — é exatamente o caso que a Aula 08 pedia (*"verificar se a engenharia de
+features não gera valores infinitos"*), com ocorrência real neste dataset.
 
 ---
 
@@ -227,3 +310,8 @@ está declarada aqui em vez de escondida.
 | 2026-08-07 | 0 | Custo FN/FP calculado como **valor esperado** (× taxa de conversão), não valor nominal | um FN só custa quando a campanha teria funcionado; ignorar isso inflaria a assimetria de 3:1 para 12:1 e distorceria a métrica |
 | 2026-08-07 | 0 | Predição é **apoio à decisão**, com humano no meio | risco financeiro de ação automática + LGPD Art. 20 (direito a revisão de decisão automatizada) |
 | 2026-08-07 | 0 | Split será **aleatório estratificado**, não temporal | imposição do dataset (retrato sem eixo temporal); declarado como limitação em vez de omitido |
+| 2026-08-10 | 1 | Manter a **variante estendida** (33 col) em vez do CSV clássico (21 col) | a caça a leakage documentada é evidência de método; dataset já limpo não permite demonstrá-la |
+| 2026-08-10 | 1 | `Churn Score` e `CLTV` **fora do treino**, com uso na avaliação | usá-las seria prever o modelo da IBM, não churn (destilação acidental) + procedência desconhecida. Viram benchmark competidor e critério de ordenação da fila |
+| 2026-08-10 | 1 | Geográficas **fora das features**, dentro da auditoria | cardinalidade inviável (4,3 clientes/CEP) **e** proxy de renda/raça. `Lat`/`Long` ficam em backlog como experimento controlado |
+| 2026-08-10 | 1 | `Total Charges` vazio → **imputar 0**, não mediana nem remoção | o vazio é medição verdadeira (sem ciclo de faturamento); mediana inventaria histórico; remoção transferiria o caso para produção |
+| 2026-08-10 | 1 | Feature de "reajuste de preço" **rejeitada antes de construir** | testada: razão com mediana 1,000 e sd 0,051, churn por quartil sem padrão. O dataset não carrega histórico de reajuste |
