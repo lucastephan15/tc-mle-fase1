@@ -549,7 +549,9 @@ o decision log existe para preservar.
 | 1 | `c15f8839` | **LogReg (MVP)** ✅ | **0,6623** | 0,850 | 0,289 | 0,524 | 0,618 | **0,133** | +0,033 | **R$ 31.092** | 0,22 |
 | 2 | `ce070deb` | LogReg `class_weight=balanced` | 0,6638 | 0,850 | 0,286 | 0,524 | 0,637 | 0,161 | +0,030 | R$ 31.138 | 0,54 |
 | 3 | `6ba7797f` | LogReg **+ 4 features** (Etapa 4) | 0,6690 | 0,853 | 0,286 | 0,529 | 0,617 | 0,133 | +0,030 | R$ 30.842 | 0,27 |
-| 4 | `aedc361b` | **LogReg, 13 features** (Etapa 5) ✅ | **0,6646** | 0,847 | 0,278 | 0,516 | 0,599 | — | +0,031 | R$ 31.750 | 0,29 |
+| 4 | `aedc361b` | **LogReg, 13 features** (Etapa 5) ✅ | **0,6646** | 0,847 | 0,278 | 0,516 | 0,599 | 0,134 | +0,031 | R$ 31.750 | 0,29 |
+| 5 | `etapa6-finalistas` | **Random Forest** regularizada (Etapa 6) | 0,6595 | — | 0,275 | 0,505 | — | 0,134 | +0,171 | R$ 30.172 | **0,27** |
+| 6 | `etapa6-finalistas` | **HistGradientBoosting** regularizado (Etapa 6) ⭐ | **0,6678** | — | **0,283** | 0,497 | — | **0,132** | +0,083 | **R$ 29.626** | **0,22** |
 | — | `b1ff54a9` | *`Churn Score` da IBM (referência)* | *0,8824* | *0,949* | *0,377* | *0,655* | *0,595* | — | — | *R$ 16.802* | *0,65* |
 
 ⭐ métrica primária · ✅ **modelo de referência corrente** (run 1 é o baseline da Etapa 3;
@@ -639,6 +641,159 @@ reais. **Descartado.**
 
 ---
 
+## 5b. Etapa 6 — comparação de algoritmos
+
+*Fechada em 11/08/2026.* Reprodução: `python -m src.comparacao` (fase 1) e
+`python -m src.finalistas` (fase 2).
+
+**Protocolo:** CV estratificada **repetida** (5 folds × 3 = 15 fits por candidato) no
+**treino**, métrica PR-AUC — a mesma partição, seed e lista de 13 features para todos.
+A validação foi tocada **uma vez**, só pelos três finalistas. O teste segue intocado.
+Por que CV repetida e não a validação: um split único já deu a resposta errada na Etapa 4,
+e é a CV que entrega o **desvio entre folds** sem o qual não se distingue ganho de sorteio.
+
+### Resultado — CV no treino (11 configurações)
+
+| Modelo | Encoding | PR-AUC | ±dp | Δ vs LogReg | Δ em dp | Gap treino→CV |
+|---|---|---|---|---|---|---|
+| **HistGradientBoosting reg.** | ordinal | **0,6919** | 0,0188 | +0,0016 | +0,07 | 0,083 |
+| HistGradientBoosting reg. | onehot | 0,6915 | 0,0192 | +0,0012 | +0,05 | 0,084 |
+| **LogReg (baseline)** | onehot | **0,6904** | 0,0236 | — | — | **0,005** |
+| Random Forest reg. | ordinal | 0,6886 | 0,0195 | −0,0018 | −0,08 | 0,171 |
+| Random Forest reg. | onehot | 0,6868 | 0,0200 | −0,0035 | −0,15 | 0,160 |
+| HistGradientBoosting | onehot | 0,6667 | 0,0168 | −0,0237 | −1,00 | 0,252 |
+| Random Forest | ordinal | 0,6519 | 0,0235 | −0,0384 | −1,63 | 0,348 |
+| Random Forest | onehot | 0,6437 | 0,0214 | −0,0466 | −1,98 | 0,356 |
+| Árvore única | onehot | 0,3971 | 0,0161 | −0,2932 | −12,44 | **0,603** |
+
+**A conclusão principal é um empate técnico.** Os três primeiros ficam dentro de **0,0033**
+um do outro, contra um desvio entre folds de **0,0188–0,0236**. A maior diferença observada
+vale **0,07 desvio-padrão** — ou seja, **nenhuma família de modelo é distinguível das outras
+neste dataset**. Declarar vencedor por PR-AUC aqui seria ler ruído.
+
+> 🔑 **O achado que vale mais que o ranking: o eixo que move o número é a REGULARIZAÇÃO, não a
+> família.** A mesma Random Forest vai de 0,6519 para 0,6886 (+1,6 dp) apenas com
+> `min_samples_leaf=5`; o mesmo boosting vai de 0,6667 para 0,6919 (+1,1 dp). Essas diferenças
+> são **maiores que qualquer diferença entre algoritmos distintos**. Contraria a afirmação
+> corrente (e o material da disciplina) de que Random Forest "não precisa de ajuste fino":
+> neste dataset, não regularizar custa mais do que escolher o algoritmo errado.
+
+### Confirmação do contrafactual da Etapa 3
+
+A LogReg entrega, com **gap de 0,005**, o que o boosting só alcança com gap de 0,083 e a
+floresta com 0,171. Isso confirma a previsão registrada antes de medir: **o sinal do Telco é
+essencialmente linear no logit**. Os modelos não-lineares têm liberdade funcional para
+representar interações e não-monotonicidades — e, tendo-a, **não encontram nada de relevante
+para fazer com ela**. Não é fracasso dos ensembles: é uma descrição do problema.
+
+### O papel da árvore única — o argumento viés-variância medido
+
+A árvore sem poda **não foi incluída para competir**; ela é o controle do argumento. Três
+medidas dos próprios dados, no lugar da citação bibliográfica:
+
+| Medida | Árvore única | RF regularizada | Leitura |
+|---|---|---|---|
+| PR-AUC (CV) | 0,3971 | 0,6886 | a floresta vale +73% sobre a mesma família |
+| PR-AUC no **treino** | **1,0000** | 0,8596 | a árvore memoriza o treino **perfeitamente** |
+| Gap treino→CV | **0,603** | 0,171 | e não leva nada disso para dados novos |
+| **Desvio da probabilidade prevista em 10 reamostragens** | **0,2462** | **0,0438** | **5,6×** |
+
+A última linha é a medida direta da variância: reamostrando o treino por bootstrap e predizendo
+sempre nos mesmos clientes da validação, a probabilidade que a **árvore** atribui ao mesmo
+cliente oscila **±24,6 pontos percentuais** conforme o sorteio dos dados; na floresta, ±4,4 pp.
+É a versão quantificada de *"dependendo do conjunto de treino, a regra da raiz mudava"* — e o
+motivo de existir do ensemble, demonstrado em vez de afirmado.
+
+> ⚠️ **Erro metodológico cometido e corrigido durante a execução:** a primeira tentativa mediu
+> essa variância pelo **desvio entre folds da CV**, que deu apenas 1,1× e não mostrava nada. O
+> desvio entre folds mistura a variância do modelo com o erro de estimativa de cada fold, e
+> compara escalas de PR-AUC muito diferentes. A medida correta é a variação da **predição** sob
+> reamostragem do treino, com o conjunto de avaliação fixo.
+
+### Duas hipóteses testadas e REFUTADAS
+
+**(a) Encoding por família de modelo — refutada.** A hipótese: o one-hot penalizaria as árvores
+por espalhar cada feature em k dummies (gastando profundidade e diluindo o sorteio do
+`max_features`). Medido nos 5 pares:
+
+| Modelo | onehot → ordinal | Δ em dp |
+|---|---|---|
+| Árvore única | 0,3971 → 0,3898 | **−0,31** |
+| Random Forest | 0,6437 → 0,6519 | +0,35 |
+| RF regularizada | 0,6868 → 0,6886 | +0,07 |
+| HistGradientBoosting | 0,6667 → 0,6658 | −0,04 |
+| HGB regularizado | 0,6915 → 0,6919 | +0,02 |
+
+Efeito **desprezível e sem sinal consistente** (muda de direção em 2 dos 5 pares). A explicação
+é a **cardinalidade**: as 10 categóricas do Telco têm 2 ou 3 níveis, e com 2 níveis one-hot e
+ordinal são literalmente a mesma coluna. O pedágio previsto existe, mas só se manifesta com
+categóricas de cardinalidade alta — que este dataset não tem. **Hipótese boa em teoria,
+irrelevante nestes dados.** O código dos dois encodings fica (`--encoding`), com custo zero.
+
+**(b) Descalibração dos ensembles — refutada no mecanismo, confirmada no efeito.** A previsão
+era que a RF comprimiria a probabilidade para o centro (por ser média de votos) e o boosting a
+extremizaria, piorando o Brier. **Não aconteceu:** Brier de 0,1339 (LogReg), 0,1343 (RF) e
+0,1320 (HGB) — praticamente idênticos, com desvios da distribuição de 0,249/0,251/0,255. Com
+`min_samples_leaf=5` e 300 árvores, a floresta ainda produz votos variados o bastante para não
+comprimir.
+**Mas a conclusão prática sobrevive por outro caminho:** o limiar ótimo **de fato não transfere**
+— ver abaixo.
+
+### O limiar de operação não é transferível — medido em reais
+
+| Modelo | Limiar ótimo próprio | Custo com o próprio | Custo se herdasse o 0,22 | Prejuízo |
+|---|---|---|---|---|
+| LogReg | 0,29 | R$ 31.750 | R$ 31.906 | +R$ 156 |
+| **Random Forest reg.** | **0,27** | R$ 30.172 | R$ 31.262 | **+R$ 1.090 (3,6%)** |
+| HistGradientBoosting reg. | 0,22 | R$ 29.626 | R$ 29.626 | +R$ 0 |
+
+O limiar ótimo varia de **0,22 a 0,29** entre modelos igualmente bons. Herdar o corte do
+baseline na Random Forest custaria **R$ 1.090 por ciclo** — sem nenhum sintoma visível: a
+PR-AUC continuaria a mesma, e só o volume da fila de retenção mudaria. **O limiar é parâmetro
+do par (modelo, custo), não do projeto.** Confirma a decisão da Etapa 0 de que a API devolve
+probabilidade, não classe.
+
+### `permutation_importance` × `feature_importances_` — o viés do MDI provado nos dados
+
+| Posição | Permutação (validação) — RF | MDI (`feature_importances_`, treino) — RF | EDA (Etapa 1) |
+|---|---|---|---|
+| 1 | Tenure Months | Tenure Months | Contract (39,9 pp) |
+| 2 | **Contract** | Total Charges | Tenure |
+| 3 | Monthly Charges | Monthly Charges | Internet Service |
+| 4 | Dependents | **Contract** | … |
+| 7 | **Total Charges** | *(2º lugar)* | — |
+
+**`Total Charges` é 2ª pelo MDI e 7ª pela permutação.** É exatamente o viés previsto: variável
+contínua de altíssima cardinalidade oferece muitos pontos de corte candidatos, e o MDI premia a
+frequência de uso em vez da contribuição real. Reforça o que já se sabia: `Total Charges`
+correlaciona **0,9996** com `Tenure × Monthly` — é redundante, e a permutação enxerga isso
+enquanto o MDI não. Simetricamente, **`Contract` sobe de 4ª para 2ª** na permutação, que é o que
+a EDA mediu de forma independente.
+→ **Decisão: a documentação usa `permutation_importance`.** O MDI fica registrado apenas como
+demonstração do viés.
+
+> 📌 **Achado lateral relevante para a Etapa 10 (monitoramento):** a permutação mostra que a
+> LogReg depende de `Tenure Months` de forma esmagadora (+0,2514, quatro vezes a segunda
+> colocada), enquanto a RF distribui o peso (+0,0623 no topo). Modelos com dependência
+> concentrada são **muito mais sensíveis a drift de uma única feature** — se a distribuição de
+> `tenure` mudar, a LogReg degrada primeiro. Isso é critério de escolha que não aparece na
+> métrica, e entra na política de monitoramento.
+
+### Decisão da Etapa 6
+
+1. **Eliminados:** árvore única (não ranqueia — folhas puras produzem probabilidades degeneradas,
+   PR-AUC 0,3971) e Random Forest (**dominada**: menor PR-AUC, maior custo e ~5× mais lenta que
+   o boosting, sem compensação em nenhum critério).
+2. **Seguem para a Etapa 7 (tuning):** **LogReg** e **HistGradientBoosting regularizado**, que
+   representam as duas pontas do trade-off — interpretabilidade máxima com gap de 0,005 × melhor
+   custo de operação (−R$ 2.124/ciclo, −6,7%).
+3. **Nenhum modelo é declarado vencedor nesta etapa.** O empate é o resultado, e o desempate,
+   se a Etapa 7 não separar os dois, **será por interpretabilidade e custo operacional, não por
+   métrica** — com a tabela de odds ratios da LogReg sustentando o argumento.
+4. O encoding ordinal permanece no código como opção medida, não como decisão adotada.
+
+---
+
 ## 6. Decisão do modelo final
 
 - **Modelo escolhido:**
@@ -701,3 +856,15 @@ reais. **Descartado.**
 | 2026-08-10 | 5 | Atributos sensíveis **mantidos**, decisão adiada para a Etapa 10.5 | removê-los custa zero, mas a escolha depende do resultado da auditoria de fairness — decisão de governança não se toma sem o dado da governança |
 | 2026-08-10 | 5 | Gate de leakage do seletor **medido**, não só afirmado | inflação de 0,0000 neste dataset (seleção estável com 4.225 amostras) × **+0,3766 sobre puro ruído** em regime `p >> n`. A regra continua valendo; agora o mecanismo está entendido |
 | 2026-08-10 | 5 | Features órfãs da Etapa 4 **removidas do código** | a remoção de 6 colunas tirou o insumo de 3 das 4 derivadas. Registrado o encadeamento em vez de apagado, com teste que trava a cascata |
+| 2026-08-11 | 6 | Protocolo da comparação = **CV estratificada repetida (5×3) no treino**, validação tocada só pelos 3 finalistas | um split único já deu a resposta errada na Etapa 4; e é o desvio entre folds que distingue ganho de sorteio |
+| 2026-08-11 | 6 | **Nenhum vencedor declarado por métrica** — LogReg 0,6904, HGB 0,6919, RF 0,6886 | os três cabem em 0,0033 contra desvio de 0,0188–0,0236: a maior diferença vale 0,07 dp. Escolher por PR-AUC aqui seria ler ruído |
+| 2026-08-11 | 6 | Incluir variantes **reguladas** (`min_samples_leaf=5`) dos ensembles na comparação | declarar vencedor sobre adversário sabidamente mal configurado (árvores até a pureza em 4.225 amostras) não é comparação, é armar o resultado |
+| 2026-08-11 | 6 | 🔑 Registrar que **a regularização move mais o número que a família do modelo** | RF: 0,6519 → 0,6886 só com `min_samples_leaf=5` (+1,6 dp) — maior que qualquer diferença ENTRE algoritmos. Contraria a alegação de que RF dispensa ajuste |
+| 2026-08-11 | 6 | Árvore única mantida no experimento **como controle**, não como candidata | é ela que mede a variância que justifica o ensemble: probabilidade oscila ±0,2462 sob reamostragem contra ±0,0438 da floresta (5,6×) |
+| 2026-08-11 | 6 | Medir variância por **reamostragem da predição**, não pelo desvio entre folds | erro cometido e corrigido: o desvio entre folds mistura variância do modelo com erro de estimativa e deu 1,1×, escondendo o efeito real de 5,6× |
+| 2026-08-11 | 6 | **Hipótese do encoding por família REFUTADA** — ordinal não ajuda árvores aqui | efeito ≤0,35 dp e muda de sinal em 2 dos 5 pares. Causa: as 10 categóricas têm 2–3 níveis, e com 2 níveis one-hot e ordinal são a mesma coluna. Código mantido, decisão não adotada |
+| 2026-08-11 | 6 | **Hipótese da descalibração REFUTADA no mecanismo** — Brier idêntico (0,132–0,134) | com `min_samples_leaf=5` e 300 árvores a RF não comprime a probabilidade como previsto. A conclusão prática (limiar não transfere) sobrevive por outra via |
+| 2026-08-11 | 6 | **Limiar re-derivado por modelo** (0,29 / 0,27 / 0,22), nunca herdado | herdar o 0,22 na RF custaria **+R$ 1.090 por ciclo** sem sintoma visível — a PR-AUC não muda, só o volume da fila. Limiar é parâmetro do par (modelo, custo) |
+| 2026-08-11 | 6 | Documentação usa **`permutation_importance`**, não `feature_importances_` | o MDI põe `Total Charges` em 2º e a permutação em 7º: viés de cardinalidade confirmado nos próprios dados. A permutação concorda com a EDA sobre `Contract`, o MDI não |
+| 2026-08-11 | 6 | **Random Forest eliminada; seguem LogReg e HistGradientBoosting** | a RF é dominada — menor PR-AUC, maior custo e ~5× mais lenta que o boosting, sem vantagem em nenhum critério |
+| 2026-08-11 | 6 | Confirmado o contrafactual registrado na Etapa 3: **o sinal é essencialmente linear no logit** | a LogReg alcança o mesmo resultado com gap de 0,005 contra 0,083 do boosting. Os não-lineares têm liberdade funcional e não acham o que fazer com ela |

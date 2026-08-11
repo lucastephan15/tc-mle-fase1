@@ -12,7 +12,12 @@ from __future__ import annotations
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import FunctionTransformer, OneHotEncoder, StandardScaler
+from sklearn.preprocessing import (
+    FunctionTransformer,
+    OneHotEncoder,
+    OrdinalEncoder,
+    StandardScaler,
+)
 
 from src import config, features
 
@@ -21,6 +26,7 @@ def construir_preprocessador(
     escalonar: bool = True,
     novas: list[str] | None = None,
     excluir: list[str] | None = None,
+    encoding: str = "onehot",
 ) -> ColumnTransformer:
     """Monta o pré-processamento em três grupos de colunas.
 
@@ -28,6 +34,15 @@ def construir_preprocessador(
     por organização estética.
 
     `escalonar=False` para modelos de árvore, a que a escala é indiferente.
+
+    `encoding="ordinal"` para modelos de árvore (Etapa 6). NÃO é uma correção do
+    one-hot: é reconhecer que **o encoding certo depende da família do modelo**.
+    Para a LogReg, ordinal seria erro grosseiro — ela leria `Contract=2` como
+    "o dobro de `Contract=1`", impondo uma ordem e uma escala que não existem.
+    Para a árvore é inócuo, porque ela só usa o valor para cortar (`<= 1.5`), e
+    qualquer particionamento das categorias continua alcançável com splits
+    sucessivos. O que a árvore GANHA é não ter a informação de uma coluna
+    espalhada por k dummies — ver §5a da nota da M02-Aula 04.
     """
     # Grupo 1 — 'Total Charges'. O vazio significa "não houve ciclo de faturamento"
     # (os 11 casos têm tenure = 0), então 0 é o valor VERDADEIRO. Imputar a mediana
@@ -48,15 +63,29 @@ def construir_preprocessador(
         passos_num.append(("escalar", StandardScaler()))
 
     # Grupo 3 — categóricas.
-    passos_cat = [
-        ("imputar", SimpleImputer(strategy="most_frequent")),
+    if encoding == "onehot":
         # handle_unknown="ignore": categoria inédita vira um vetor de zeros em vez
         # de derrubar a API. drop=None de propósito, contra a recomendação usual de
         # drop_first: com drop, o vetor de zeros da categoria desconhecida COLIDE
         # com o vetor da categoria dropada — um Gender="Other" seria silenciosamente
         # tratado como "Female". A dummy variable trap que o drop evita é inofensiva
         # sob a regularização L2 padrão do sklearn; a colisão não é.
-        ("codificar", OneHotEncoder(handle_unknown="ignore", sparse_output=False)),
+        codificador = OneHotEncoder(handle_unknown="ignore", sparse_output=False)
+    elif encoding == "ordinal":
+        # Mesma proteção da linha acima, por outro mecanismo: a categoria inédita
+        # vira -1 em vez de derrubar a API. Como todas as categorias conhecidas
+        # recebem 0..k-1, o -1 fica FORA do intervalo e a árvore pode isolá-lo com
+        # um único split — a inédita não é silenciosamente confundida com nenhuma
+        # categoria vista, que é a mesma exigência que motivou o drop=None.
+        codificador = OrdinalEncoder(
+            handle_unknown="use_encoded_value", unknown_value=-1,
+        )
+    else:
+        raise ValueError(f"encoding desconhecido: {encoding}")
+
+    passos_cat = [
+        ("imputar", SimpleImputer(strategy="most_frequent")),
+        ("codificar", codificador),
     ]
 
     # As features da Etapa 4 entram nos mesmos grupos das originais — só a lista
@@ -83,12 +112,40 @@ def construir_preprocessador(
     )
 
 
+def mascara_categorica(
+    novas: list[str] | None = None,
+    excluir: list[str] | None = None,
+) -> list[bool]:
+    """Quais colunas da saída do preprocessador ORDINAL são categóricas.
+
+    Serve ao `categorical_features` do `HistGradientBoostingClassifier`, que
+    trata categórica de forma nativa (particiona o conjunto de níveis num só
+    split) em vez de tratá-la como número ordenado.
+
+    Vive aqui, e não em quem chama, porque depende da ORDEM em que o
+    `ColumnTransformer` concatena os três grupos — zero, num, cat. Se essa ordem
+    mudar lá em cima, é aqui que tem de mudar junto, e não num arquivo distante.
+
+    ⚠️ Só vale para `encoding="ordinal"`: com one-hot, cada categórica vira k
+    colunas e a contagem não fecha.
+    """
+    novas = novas or []
+    fora = set(excluir or [])
+    n_zero = len([c for c in config.NUM_ZERO if c not in fora])
+    n_num = len([c for c in config.NUM + [x for x in features.NOVAS_NUM if x in novas]
+                 if c not in fora])
+    n_cat = len([c for c in config.CAT + [x for x in features.NOVAS_CAT if x in novas]
+                 if c not in fora])
+    return [False] * (n_zero + n_num) + [True] * n_cat
+
+
 def construir_pipeline(
     modelo,
     escalonar: bool = True,
     novas: list[str] | None = None,
     excluir: list[str] | None = None,
     seletor=None,
+    encoding: str = "onehot",
 ) -> Pipeline:
     """Encadeia pré-processamento e modelo num único objeto.
 
@@ -108,7 +165,7 @@ def construir_pipeline(
             features.adicionar_features, validate=False, feature_names_out=None,
         )))
     passos.append(("preproc", construir_preprocessador(
-        escalonar=escalonar, novas=novas, excluir=excluir)))
+        escalonar=escalonar, novas=novas, excluir=excluir, encoding=encoding)))
     if seletor is not None:
         # ⛔ O seletor entra COMO PASSO DO PIPELINE, nunca aplicado antes ao
         # dataset inteiro. Rodar SelectKBest fora daqui é o exemplo canônico de
