@@ -1,5 +1,9 @@
 # Tech Challenge — Fase 1 · Predição de Churn (Telecom)
 
+[![CI](https://github.com/lucastephan15/tc-mle-fase1/actions/workflows/ci.yml/badge.svg)](https://github.com/lucastephan15/tc-mle-fase1/actions/workflows/ci.yml)
+[![python](https://img.shields.io/badge/python-3.12-blue)](pyproject.toml)
+[![ruff](https://img.shields.io/badge/lint-ruff-261230)](pyproject.toml)
+
 Pós-graduação em **Machine Learning Engineering** — FIAP + Alura PosTech
 Entrega: **01/09/2026** · Modalidade: individual
 
@@ -66,12 +70,33 @@ GitHub Actions · Docker
 ## Reprodutibilidade
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt      # versões travadas
+make setup      # venv + versões travadas
+make ci         # lint + 33 testes + gate de promoção — o mesmo que o CI roda
+make help       # todos os alvos
 ```
 
 Versões pinadas + seeds fixados (`random_state`, `np.random.seed`, `torch.manual_seed`).
 Prova real de reprodutibilidade: clonar numa máquina limpa e obter **o número exato**.
+
+### O que o CI faz
+
+| Job | Faz | Falha quando |
+|---|---|---|
+| **QA** | `ruff check` + `pytest` (33 testes) | lint sujo ou qualquer teste vermelho |
+| **Gate de promoção** | treina o modelo de referência e mede na **validação** | PR-AUC < `config.GATE_PR_AUC_MIN` (0,66) |
+
+Três decisões que valem a leitura, todas em `.github/workflows/ci.yml` e no decision log:
+
+- **O gate mede na validação, não no teste.** Decidir promoção olhando o teste a cada push o
+  converte em validação depois de alguns commits — ele deixa de estimar generalização, e o
+  sintoma é traiçoeiro porque o gap treino-teste continua bonito. É divergência deliberada do
+  enunciado da disciplina.
+- **O piso é absoluto (0,66), não relativo.** Um gate do tipo *"≥ 80% do baseline"* aceitaria
+  0,53 — pior que modelos que já foram rejeitados.
+- **Continuous Delivery, não Deployment.** O último passo para produção é humano, porque a
+  predição dispara ação comercial com custo real. O job de registro no Model Registry
+  ainda **não** existe, e o porquê está comentado no próprio workflow: sem backend persistente
+  do MLflow, ele declararia sucesso sem ter feito nada.
 
 ---
 
@@ -81,11 +106,15 @@ Prova real de reprodutibilidade: clonar numa máquina limpa e obter **o número 
 |---|---|
 | 0 · Enquadramento do problema | ✅ concluída — `docs/decision-log.md` §0 |
 | 1 · Data Understanding (EDA) | ✅ concluída — `docs/decision-log.md` §1 · `notebooks/01_eda.py` |
-| 2 · Data Preparation | ⬜ |
-| 3 · Baseline / MVP | ⬜ |
-| 4-8 · FE → seleção → comparação → tuning → MLP | ⬜ |
+| 2 · Data Preparation | ✅ concluída — §2 · split 60/20/20, teste intocado |
+| 3 · Baseline / MVP | ✅ concluída — §3 · **LogReg, PR-AUC 0,6623** contra piso de 0,2654 |
+| 4 · Feature Engineering | ✅ concluída — §3 · 4 features medidas por ablação e **todas descartadas** |
+| 5 · Seleção de features | ✅ concluída — §4 · **19 → 13 features**, por custo operacional |
+| 6 · Comparação de algoritmos | ✅ concluída — §5b · **empate técnico** entre LogReg, HGB e RF (0,07 dp) |
+| 7 · Tuning | ⬜ — finalistas: LogReg e HistGradientBoosting |
+| 8 · MLP em PyTorch | ⬜ |
 | 9 · Pipeline serializado + API | ⬜ |
-| 9.5 · CI/CD | ⬜ |
+| 9.5 · CI/CD | 🟡 **parcial** — QA + gate de promoção rodando; falta o registro (depende da Etapa 9) |
 | 10 · Monitoramento | ⬜ |
 | 10.5 · Governança e fairness | ⬜ |
 | 11 · Documentação | ⬜ |

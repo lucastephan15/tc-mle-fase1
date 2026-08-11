@@ -1,0 +1,65 @@
+[project]
+name = "tc-mle-fase1"
+version = "1.0.0"
+description = "Predição de churn em telecom — ranqueador de clientes para retenção"
+requires-python = ">=3.12"
+readme = "README.md"
+
+# ⚠️ As dependências NÃO são declaradas aqui de propósito. A fonte de verdade é o par
+# requirements.in (diretas, sem pin) -> requirements.txt (transitivas, TRAVADAS), porque
+# joblib/skops é acoplado à versão da biblioteca: um pipeline salvo em scikit-learn 1.9
+# pode falhar, ou pior, se comportar diferente em 1.10. Duplicar a lista aqui criaria duas
+# verdades que divergem em silêncio.
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["src"]
+
+# --- Lint ------------------------------------------------------------------
+[tool.ruff]
+line-length = 90
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes — variável não usada, import morto, f-string sem placeholder
+    "I",        # isort — ordem de imports estável entre máquinas
+    "UP",       # pyupgrade
+    "B",        # flake8-bugbear — inclui B006 (default mutável) e B008
+    "SIM",      # simplificações
+    "NPY",      # armadilhas específicas de numpy
+    "PD",       # pandas-vet
+]
+ignore = [
+    "E501",     # comprimento de linha: o formatter cuida; travar aqui quebraria comentários longos
+    # NPY002 pede trocar `np.random.seed()` por `np.random.Generator`. Aqui a regra genérica
+    # está ERRADA para o nosso caso: a chamada é deliberadamente GLOBAL, porque é o estado
+    # global de `np.random` que o scikit-learn consulta em pontos que não expõem
+    # `random_state`. Trocar por um Generator local deixaria justamente essas partes livres —
+    # e reprodutibilidade é requisito registrado na Etapa 9.5, não preferência de estilo.
+    "NPY002",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Testes podem afirmar coisas que o lint estranha (comparação com True, asserts soltos).
+"tests/*" = ["B011"]
+# Notebooks são EXPLORAÇÃO, não entregável — quem produz o modelo é `src/` (ver README).
+# PD101 pediria trocar `nunique() == 1` por uma forma mais eficiente; num script que roda
+# uma vez sobre 7.043 linhas, isso troca clareza por microssegundos. Reescrever código de
+# análise para agradar o linter é o rabo abanando o cachorro.
+"notebooks/*" = ["PD101"]
+
+# --- Testes ----------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+# Um warning que ninguém lê é um warning que não existe. `ConvergenceWarning` engolido é
+# falha SILENCIOSA: o sklearn devolve os coeficientes onde o LBFGS parou e não reclama mais
+# (ver decision log, Etapa 3). Aqui ele vira erro de teste.
+filterwarnings = [
+    "error::sklearn.exceptions.ConvergenceWarning",
+]

@@ -60,7 +60,7 @@ def test_mascara_categorica_bate_com_a_saida_do_preprocessador(bruto):
     mascara = mascara_categorica()
 
     assert len(mascara) == len(cols)
-    marcadas = {c for c, m in zip(cols, mascara) if m}
+    marcadas = {c for c, m in zip(cols, mascara, strict=True) if m}
     assert marcadas == set(config.CAT)
 
 

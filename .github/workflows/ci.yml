@@ -1,0 +1,110 @@
+name: CI
+
+# Dispara em push na main e em toda PR. `workflow_dispatch` permite rodar à mão
+# pela interface do GitHub, o que é útil para conferir se uma falha é do código
+# ou foi coisa de ambiente.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Push seguido de push não deve manter dois runs competindo pelo mesmo resultado:
+# o antigo é cancelado. Economiza minutos e evita ler um relatório obsoleto.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1 — Quality Assurance: o código está sadio?
+  # ---------------------------------------------------------------------------
+  qa:
+    name: Lint e testes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          # Sem o cache, instalar o requirements.txt (que inclui torch) domina o
+          # tempo do run. CI lento é CI que o time desliga.
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Instalar dependências
+        # requirements.txt tem as versões TRAVADAS, não as declaradas. É o mesmo
+        # motivo do pickle acoplado à versão: o CI precisa reproduzir o ambiente
+        # de treino, não uma resolução nova a cada semana.
+        run: pip install -r requirements.txt
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Testes
+        # Os testes NÃO são de cobertura — cada um trava uma decisão do decision
+        # log. Dois deles já pegaram erro real: o dataset ordenado pelo alvo e a
+        # colisão da categoria inédita com a categoria dropada.
+        run: pytest
+
+  # ---------------------------------------------------------------------------
+  # Job 2 — o modelo ainda vale o que dizia valer?
+  # ---------------------------------------------------------------------------
+  gate:
+    name: Gate de promoção
+    runs-on: ubuntu-latest
+    # `needs` faz duas coisas: ordena e ABORTA em cascata. Rodar o gate sobre
+    # código que não passou nos testes só produziria um número sem sentido.
+    needs: qa
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      - name: Treinar e avaliar contra o piso
+        # Sai com código 1 se PR-AUC de VALIDAÇÃO < config.GATE_PR_AUC_MIN.
+        # Medir no teste aqui o converteria em validação depois de alguns pushes.
+        run: python -m src.gate
+
+      - name: Publicar métricas no resumo do run
+        if: always()
+        run: |
+          {
+            echo "### Gate de promoção"
+            echo '```'
+            python -m src.gate || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+# -----------------------------------------------------------------------------
+# O QUE AINDA NÃO ESTÁ AQUI, E POR QUÊ
+#
+# Falta o terceiro job canônico — registro do modelo no MLflow Model Registry com
+# alias `Staging`. Ele NÃO foi escrito de propósito, e escrevê-lo agora produziria
+# a pior espécie de CI: o que declara sucesso sem ter feito nada. Dois bloqueios
+# reais, ambos registrados no decision log:
+#
+#   1. `mlruns/` e `mlflow.db` vivem no filesystem do runner e são DESTRUÍDOS com
+#      o job. O log diria "registrado em Staging" e no dia seguinte não haveria
+#      nada. Registro exige backend persistente (MLFLOW_TRACKING_URI via secret
+#      apontando para um tracking server externo).
+#   2. O artefato serializado do pipeline é a Etapa 9, que ainda não existe.
+#
+# Quando as duas condições forem satisfeitas, o job de registro precisa das DUAS
+# peças — `needs:` (ordem) e `upload/download-artifact` (o material) — porque cada
+# job roda em runner limpo e não enxerga os arquivos do anterior.
+#
+# Escolha registrada: Continuous DELIVERY, não Deployment. O último passo para
+# produção é humano, porque a predição dispara ação comercial com custo real.
+# -----------------------------------------------------------------------------

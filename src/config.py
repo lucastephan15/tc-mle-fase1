@@ -99,3 +99,27 @@ AUX = AUDITORIA + GEOGRAFICAS
 # Capacidade operacional assumida na Etapa 0: o time trabalha 10-20% da base
 # por ciclo. É nesses pontos que a métrica de negócio é lida.
 KS_OPERACIONAIS = [0.10, 0.20]
+
+# --- Gate do CI (Etapa 9.5) ------------------------------------------------
+
+# Piso de PR-AUC na VALIDAÇÃO abaixo do qual o CI falha e nada é promovido.
+#
+# Três decisões embutidas neste número:
+#
+# 1. É medido na VALIDAÇÃO, não no teste. O enunciado da Aula 08 sugere o teste —
+#    e seguir isso transformaria o teste em validação depois de alguns pushes:
+#    ele deixaria de ser estimativa honesta de generalização. O sintoma é
+#    traiçoeiro porque o gap treino-teste continua bonito.
+#
+# 2. É ABSOLUTO e comparativo contra o campeão corrente (LogReg 13 features,
+#    0,6646), não relativo do tipo "80% do baseline" — que com 0,6646 aceitaria
+#    0,53, um modelo pior que muitos que já rejeitamos.
+#
+# 3. A folga de ~0,005 cobre variação numérica entre plataformas (BLAS, versão de
+#    biblioteca), NÃO degradação aceita. Mesmo modelo, mesma partição e mesma seed
+#    deveriam dar o mesmo número; a folga existe porque "deveriam" não é "dão".
+#
+# ⚠️ Quando o campeão mudar (Etapas 7/8), este número sobe junto. Gate que não
+# acompanha o campeão vira decoração.
+GATE_PR_AUC_MIN = 0.66
+GATE_MODELO_REFERENCIA = "logreg"
