@@ -150,6 +150,12 @@ def avaliar_candidato(X, y, nome: str, encoding: str, rapido: bool) -> dict:
         "pr_auc": float(r["test_score"].mean()),
         "dp": float(r["test_score"].std()),
         "treino": float(r["train_score"].mean()),
+        # As 15 dobras individuais, não só média e desvio. Agregar aqui jogaria
+        # fora a informação que habilita teste PAREADO (t de Student, Wilcoxon)
+        # entre candidatos — e o pareamento vem de graça: o `random_state` fixo
+        # no RepeatedStratifiedKFold garante que todos veem exatamente as mesmas
+        # dobras. Recuperar isso depois custaria re-rodar a comparação inteira.
+        "scores": r["test_score"].tolist(),
         "segundos": time.perf_counter() - t0,
     }
 

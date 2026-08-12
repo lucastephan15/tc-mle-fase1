@@ -794,6 +794,242 @@ demonstração do viés.
 
 ---
 
+## 5c. Etapa 7 — tuning de hiperparâmetros
+
+### ⚠️ PRÉ-REGISTRO — escrito ANTES de rodar (11/08/2026)
+
+Esta subseção foi commitada **antes** da primeira execução de `src/tuning.py`, de propósito.
+Previsão registrada e depois confirmada é evidência de método; previsão escrita depois do
+resultado é narrativa. As quatro expectativas:
+
+1. **O ganho do tuning será pequeno.** A Etapa 6 mediu três famílias dentro de 0,0033 contra
+   desvio entre folds de 0,0188–0,0236 — o teto aparenta ser **dos dados**, não do modelo.
+   Esperado: ganho **abaixo de 1 desvio**, ou seja, não distinguível de ruído.
+2. **O `C` ótimo da LogReg sairá alto.** Com `n >> p` (4.225 amostras × 24 colunas após o
+   one-hot) há amostra de sobra por parâmetro, então não há muito o que encolher. `C` muito
+   **baixo** seria sinal de investigar, não de comemorar. ⚠️ `C = 1/λ` — **escala invertida**
+   em relação ao `alpha` do `Ridge`/`Lasso`; montar a grade com a intuição de `alpha` inverteria
+   o experimento inteiro.
+3. **O `l1` não deve ganhar do `l2`.** L1 zera coeficientes, e a Etapa 5 já mediu que **podar
+   features não melhora a métrica** neste dataset (19 → 13 sem custo, mas sem ganho). Se o L1
+   vencer, o ganho virá de estabilidade, não de seleção.
+4. **O HGB não deve abrir vantagem decisiva.** Se abrir, o desempate da Etapa 6 muda de critério;
+   se não abrir, vale o argumento do Netflix Prize (item 43 do revisita): empate dentro do ruído
+   ⇒ escolhe-se o mais simples e interpretável.
+
+### 🚨 Disciplina de relato — o viés de seleção que esta etapa introduz (item 46)
+
+> *"Se agora reportamos o erro médio de 5-fold obtido, estaremos ligeiramente otimistas, pois
+> aquele erro médio foi usado na seleção"* — M02-A07, pág. 11–12.
+
+O `max` sobre muitas medições ruidosas captura **ruído favorável**, e o viés **cresce com o
+tamanho da grade**. É o mesmo mecanismo do gate medido no teste (§9.5) e de decidir feature na
+validação (§3), em terceiro disfarce — e **não tem sintoma**: o gap treino–validação continua
+bonito, porque não é o modelo que aprendeu mal, é o instrumento que foi gasto pelo uso.
+
+Solução formal seria **nested CV**. A prática que a própria aula indica é **train/val/test**, que
+o split 60/20/20 da Etapa 2 já entrega. Logo, o que falta aqui não é protocolo — é disciplina:
+
+1. tunar por **CV no treino**;
+2. **nunca** publicar o melhor score da grade como estimativa de generalização;
+3. o número da documentação sai da **validação**; o **teste continua intocado**, para ser tocado
+   uma vez só, no fim.
+
+*Pergunta-âncora:* **"esse número foi usado para escolher alguma coisa?"** Se foi, ele não é
+estimativa imparcial daquilo que ele escolheu.
+
+### Estratégia de busca — escolhida pelo tamanho da grade (item 47)
+
+| Finalista | Busca | Por quê |
+|---|---|---|
+| **LogReg** | `GridSearchCV` | `C` (6) × `penalty` (2) = **12 configs**, ambos os eixos sabidamente relevantes. Exaustivo custa 180 fits — barato, e garante o ótimo dentro da grade |
+| **HGB** | `RandomizedSearchCV` | espaço de **5 eixos** com centenas de combinações, e com **suspeita de eixo inerte**. Bergstra & Bengio (2012) — bibliografia oficial da aula, pág. 25: num grid, um eixo que não importa desperdiça `k×` o orçamento medindo a mesma coisa; na busca aleatória cada amostra testa um valor **novo de todos**, então a resolução no eixo que importa é o total de amostras, não a raiz dele |
+
+⚠️ **As duas grades não são montadas do mesmo jeito, e isso é a assimetria da M02-A04:**
+`n_estimators` é **seguro na RF** (mais árvores não sobreajusta) e é **regularizador no
+boosting** (mais árvores sobreajusta). No HGB o eixo entra como `max_iter` **com
+`early_stopping` interno**, que é a forma correta de deixar a validação escolher onde parar.
+
+### 🔑 A regra 1-SE aplicada DENTRO da grade (uso original de Hastie)
+
+Em vez do `argmax`, o `refit` é um *callable* que escolhe **o candidato mais regularizado cujo
+score esteja dentro de 1 erro padrão do melhor**. Motivo medido no hands-on da aula (300 seeds):
+a 1-SE recupera a complexidade verdadeira em **98%** das amostras contra **66%** do `argmin` —
+o pico da grade é, em boa medida, sorteio favorável.
+
+Isso exige uma **ordem de complexidade declarada por família** (a regra foi formulada para um
+eixo de complexidade *dentro* de uma família):
+- **LogReg:** menor `C` = mais regularizado = mais simples. Desempate: `l1` antes de `l2`
+  (zera coeficientes ⇒ modelo com menos parâmetros efetivos).
+- **HGB:** menos capacidade primeiro — menor `max_leaf_nodes`, depois menor `learning_rate`,
+  depois maior `min_samples_leaf`, depois maior `l2_regularization`.
+
+⚠️ **Ressalva registrada:** com CV **repetida**, as `K` dobras **não são independentes** (as
+repetições reusam os mesmos dados), então `dp/√K` **superestima** a precisão — é a correção de
+**Nadeau–Bengio**, ausente do material da disciplina. Por isso o envelope 1-SE é calculado em
+**três leituras da dispersão** (erro padrão, versão conservadora e desvio cheio): se as três
+concordam, a conclusão não depende de qual foi escolhida, e essa robustez é o argumento.
+
+---
+
+### Resultado — CV no treino (58 configurações, protocolo idêntico ao da Etapa 6)
+
+*Executada em 11/08/2026.* Reprodução: `make tuning` (37 segundos no total).
+
+| Família | Busca | Configs | Pico da grade | Escolha 1-SE | Δ (custo da 1-SE) |
+|---|---|---|---|---|---|
+| **LogReg** | grid | 18 | 0,6904 ± 0,0236 (`C=1,0`, `l1_ratio=0,5`) | 0,6861 ± 0,0222 (`C=0,1`, L1 pura) | −0,0044 (−0,18 dp) |
+| **HGB** | random | 40 | 0,7007 ± 0,0208 | 0,6973 ± 0,0218 (`max_leaf_nodes=2`) | −0,0034 (−0,16 dp) |
+
+> 🔑 **O achado da LogReg é a ausência de achado, e ele é forte: o default JÁ ERA o pico da
+> grade.** `C=1,0` com L2 pura dá **0,6904** — exatamente o número que a Etapa 6 mediu com o
+> LBFGS, e o mesmo valor do melhor ponto entre as 18 configurações. Dezoito ajustes de
+> regularização não encontraram **nada** acima do que a biblioteca já entregava. A expectativa
+> pré-registrada era "`C` alto e ganho pequeno"; o resultado medido é **ganho exatamente zero**.
+>
+> Isso é a contraparte necessária do achado da Etapa 6 (*"a regularização move mais o número que a
+> família"*): mover a regularização importou **onde ela estava ausente** — nos ensembles crescidos
+> até a pureza —, e não importa num modelo que já vinha regularizado por default. As duas frases
+> juntas descrevem o mesmo fenômeno, e só a segunda estava escrita.
+
+**Sobre o eixo `penalty`:** ele não existe mais. O scikit-learn **1.8 depreciou `penalty`**
+(remoção em 1.10) e unificou tudo em `l1_ratio` — `0,0` é L2 pura, `1,0` é L1 pura, e o meio é
+elastic net. A grade ganhou um terceiro ponto de graça, e o `solver='saga'` foi usado nos três
+para manter a função objetivo constante ao longo do eixo (o `liblinear` penalizaria também o
+intercepto, alterando o experimento justamente na variável medida).
+
+**Envelopes 1-SE, nas três leituras:**
+
+| Família | `dp/√15` (material) | `dp/√5` (Nadeau–Bengio) | desvio cheio |
+|---|---|---|---|
+| LogReg | 0,6843 → **12 de 18** dentro | 0,6799 → 13 de 18 | 0,6668 → 15 de 18 |
+| HGB | 0,6953 → **9 de 40** dentro | 0,6914 → 15 de 40 | 0,6799 → 29 de 40 |
+
+As três leituras concordam no que importa: **a maioria da grade é indistinguível do pico**. Com
+12 de 18 candidatos empatados na LogReg, o `argmax` estaria escolhendo entre doze modelos
+equivalentes — e "escolher o melhor de doze empates" é a definição operacional de ler ruído.
+
+### O aviso de borda produziu uma AÇÃO, não só um alerta
+
+A primeira execução do HGB bateu no extremo de três eixos — `max_leaf_nodes=4` (mínimo),
+`min_samples_leaf=160` (máximo) e `l2_regularization=0,0` — **todos na direção de menos
+capacidade**. A grade foi estendida para onde o aviso apontava (`max_leaf_nodes` até **2**, o
+toco de decisão; `min_samples_leaf` até 320), e o resultado foi que a 1-SE **desceu ainda mais**:
+escolheu `max_leaf_nodes=2` e continua na borda.
+
+Ou seja: o boosting, neste dataset, quer ser o mais fraco que a grade permitir. Não é sinal de
+que faltou tunar — é a **terceira medição independente** de que o sinal do Telco é simples,
+depois do gap de 0,005 da LogReg (Etapa 6) e do empate entre famílias. Um modelo-base com **duas
+folhas** não representa interação nenhuma: é um aditivo de decisões univariadas, ou seja, um
+parente próximo do modelo linear que já estava lá.
+
+### 🎯 O teste pareado diz que o HGB ganha. A validação diz que não. Os dois estão certos.
+
+Com os 15 scores por dobra agora preservados (item 45), o teste pareado é imediato — e o
+pareamento não custou nada, porque o `random_state` fixo no `RepeatedStratifiedKFold` já fazia
+todos os candidatos verem exatamente as mesmas partições:
+
+| Medida | Valor |
+|---|---|
+| Δ médio (HGB − LogReg) por dobra | **+0,0113** |
+| Dobras em que o HGB vence | **13 de 15** |
+| t pareado | p < 0,001 |
+| Wilcoxon (não supõe normalidade) | p < 0,001 |
+
+E, na validação, **o HGB é o pior dos três** (0,6589 contra 0,6620 da LogReg tunada e 0,6646 do
+campeão). Não há contradição: o teste pareado responde *"a diferença é consistente?"* — e é —,
+não *"a diferença importa?"*. Ele remove a variância da partição, o que lhe dá poder para detectar
+**+0,011 de PR-AUC**, uma diferença que a operação não distingue de zero (R$ 278 de custo por
+ciclo, 0,9%). Somem-se as duas ressalvas: os p-valores são **anticonservadores** (Nadeau–Bengio),
+e o número da CV **foi usado para escolher**.
+
+> **Formulação para a defesa:** significância estatística e relevância prática são perguntas
+> diferentes, e com 15 dobras pareadas a primeira é fácil de conseguir. A decisão continua sendo
+> da 1-SE e da validação — o teste pareado entra como evidência corroborante, exatamente o papel
+> que lhe foi atribuído **antes** de ele ser calculado.
+
+### 🚨 O viés de seleção previsto no pré-registro foi MEDIDO — com grupo de controle
+
+O campeão serve de controle perfeito: ele **não foi escolhido por grade nenhuma**, então a queda
+dele da CV para a validação mede o que a troca de conjunto custa por si só.
+
+| Modelo | Candidatos | CV (treino) | Validação | Queda | **Excedente sobre o controle** |
+|---|---|---|---|---|---|
+| **Campeão** (controle) | **0** | 0,6904 | 0,6646 | −0,0258 | — |
+| LogReg 1-SE | 18 | 0,6861 | 0,6620 | −0,0240 | **+0,0018** |
+| HGB 1-SE | 40 | 0,6973 | 0,6589 | −0,0384 | **−0,0126** |
+
+Duas leituras, ambas previstas pela aula e nenhuma delas óbvia sem o controle:
+
+1. **A maior parte da queda não é viés de seleção** — é diferença entre CV no treino e um holdout
+   único, e aparece igual no modelo que nunca passou por busca nenhuma. Atribuir os 0,026 inteiros
+   à seleção seria o erro simétrico de ignorá-la.
+2. **O excedente cresce com o tamanho da grade, exatamente como a aula prevê.** Com 18 candidatos
+   e a 1-SE protegendo, o excedente é **nulo** (+0,0018, ou seja, a LogReg tunada generalizou tão
+   bem quanto o controle). Com 40 candidatos, o excedente é **−0,0126** — metade de uma dobra de
+   desvio, e material o bastante para inverter o ranking entre os dois finalistas.
+
+> É a razão de a disciplina de relato ter sido escrita **antes**: se o número reportado fosse o
+> pico da grade do HGB (**0,7007**), a documentação anunciaria um ganho de +0,0088 sobre o
+> campeão. O número honesto, na validação, é **0,6589** — ou seja, **−0,0057**. A diferença entre
+> a versão otimista e a real é de **0,042 de PR-AUC**, e nenhum sintoma a denunciaria: o gap
+> treino–validação continua bonito, porque não é o modelo que aprendeu mal, é o instrumento que
+> foi gasto pelo uso.
+
+### Validação — o número honesto (tocada uma vez, com os modelos já escolhidos)
+
+| Modelo | PR-AUC | Brier | Limiar ótimo | Custo/ciclo | recall@10% |
+|---|---|---|---|---|---|
+| **Campeão — LogReg default, 13 features** | **0,6646** | 0,1339 | 0,29 | R$ 31.750 | 0,278 |
+| LogReg 1-SE (`C=0,1`, L1) | 0,6620 | 0,1342 | 0,33 | **R$ 31.326** | 0,283 |
+| HGB 1-SE | 0,6589 | 0,1351 | 0,32 | R$ 31.604 | 0,281 |
+
+*(Piso da PR-AUC = prevalência = 0,2654. Teto estrutural do recall@10% = 0,377.)*
+
+Os três cabem em **0,0057**, contra desvio entre folds de 0,022. E as métricas **discordam entre
+si**: a LogReg tunada tem a **pior** PR-AUC das duas lineares e o **menor custo em reais**
+(−R$ 424, −1,3%) — porque o limiar re-derivado a coloca num ponto de operação um pouco melhor.
+Discordância dessa magnitude entre métricas é o que empate dentro do ruído produz; ler qualquer
+uma delas como desempate seria escolher a métrica depois de ver o resultado.
+
+### 🔑 A L1 eliminou duas colunas ORIGINAIS — e isso é a distinção da Etapa 5 outra vez
+
+A configuração 1-SE zerou **8 de 28** coeficientes (29% das colunas pós-encoding). Mas zerar
+dummy não é zerar feature: a coluna original só sai do custo de coleta, validação e monitoramento
+se **todas** as suas dummies zerarem. Medido: **duas** saem inteiras.
+
+| Coluna eliminada pela L1 | O que isso confirma |
+|---|---|
+| **`Total Charges`** | **terceira evidência independente** de que é redundante: correlaciona **0,9996** com `Tenure × Monthly` (EDA, Etapa 1), a `permutation_importance` a põe em **7º** contra o 2º do MDI (Etapa 6), e agora a L1 lhe atribui coeficiente **zero**. Três métodos que não compartilham mecanismo, mesma conclusão |
+| **`Gender`** | insumo para a Etapa 10.5, **não** a decisão dela. Que a L1 não encontre sinal preditivo não responde à pergunta de fairness — a coluna sai do modelo por não predizer, e a decisão de governança precisa do dado da auditoria |
+
+**Sondagem do contrato reduzido** (11 features, `Total Charges` e `Gender` fora): CV **0,6883**,
+validação **0,6642** — indistinguível das 13. Confirma pelo terceiro caminho o que a Etapa 5 já
+tinha medido: neste dataset, podar não custa e não ganha em métrica.
+
+### Decisão da Etapa 7
+
+1. **O campeão permanece: LogReg nos defaults, 13 features, PR-AUC 0,6646 na validação.**
+   Nenhuma das 58 configurações o superou lá. O tuning é reportado como **ganho zero**, que era a
+   previsão pré-registrada — e uma previsão confirmada é resultado, não etapa desperdiçada.
+2. **A configuração 1-SE (`C=0,1`, L1) NÃO é adotada**, apesar de a regra apontá-la. Motivo
+   escrito: na validação ela empata (−0,0026, 0,11 dp) e a simplicidade que ela compra é real mas
+   pequena (2 colunas de 13), enquanto o custo é concreto — a margem do gate do CI cairia de
+   0,0046 para **0,0020**, menos que a folga de 0,005 reservada para variação numérica entre
+   plataformas. Trocar o modelo para ficar com menos folga do que a variação esperada é comprar
+   um CI intermitente em troca de nada.
+3. **O gate do CI NÃO sobe** (item 35 do revisita). Ele acompanha o campeão, e o campeão não
+   mudou. Elevar o piso sem um modelo melhor seria transformar o gate em obstáculo arbitrário;
+   mantê-lo em 0,66 com a justificativa escrita é o oposto de afrouxá-lo para ficar verde.
+4. **`Total Charges` e `Gender` permanecem no contrato v1**, com a evidência registrada. A
+   remoção passou a ter três confirmações independentes, mas não muda métrica nenhuma — e a de
+   `Gender` é decisão da Etapa 10.5, que precisa dele disponível para auditar.
+5. **A Etapa 8 recebe o HGB tunado como adversário do MLP**, e não a configuração de referência
+   da Etapa 6: comparar a rede com um boosting mal ajustado repetiria o erro que o gate de justiça
+   da Etapa 6 existe para impedir.
+
+---
+
 ## 6. Decisão do modelo final
 
 - **Modelo escolhido:**
@@ -877,3 +1113,17 @@ demonstração do viés.
 | 2026-08-11 | 9.5 | `NPY002` ignorado no ruff **com justificativa**, não por conveniência | a regra pede trocar `np.random.seed()` por `Generator`; aqui a chamada é deliberadamente global, porque é esse estado que o sklearn consulta onde não expõe `random_state`. Regra genérica errada para o caso |
 | 2026-08-11 | 9.5 | `pyproject.toml` **não declara dependências** | a fonte de verdade é `requirements.in` → `requirements.txt` travado. Duplicar a lista criaria duas verdades que divergem em silêncio |
 | 2026-08-11 | 9.5 | 🎯 **Reprodutibilidade cross-platform PROVADA, não declarada** | o gate rodou no runner Ubuntu (Python 3.12.13, BLAS diferente) e devolveu **exatamente** os mesmos números do macOS local: PR-AUC **0,6646**, limiar 0,29, custo R$ 31.750, mesmo sha256 do dataset. É a resposta empírica a *"alguém clona numa máquina limpa e obtém o seu número?"* — e a folga de 0,005 do gate, prevista para cobrir variação de plataforma, mostrou-se desnecessária (variação real: zero). Mantida por prudência |
+| 2026-08-11 | 7 | Expectativas do tuning **pré-registradas** no log antes da primeira execução | previsão confirmada é evidência de método; previsão escrita depois do resultado é narrativa. As quatro se confirmaram, inclusive a de ganho pequeno |
+| 2026-08-11 | 7 | Estratégia de busca escolhida pelo **tamanho da grade**: grid na LogReg (18), random no HGB (40) | Bergstra & Bengio (2012), bibliografia oficial: num grid, um eixo inerte gasta k× o orçamento medindo a mesma coisa. Grade pequena com todos os eixos relevantes não tem esse problema |
+| 2026-08-11 | 7 | `refit` = **regra 1-SE** (Hastie et al., 2009), não `argmax` | com 12 de 18 candidatos dentro do envelope, o pico é escolha entre empates. A 1-SE recupera a complexidade verdadeira em 98% das amostras contra 66% do argmin (300 seeds, hands-on da M02-A07) |
+| 2026-08-11 | 7 | Envelope 1-SE calculado em **três leituras** da dispersão, não uma | `dp/√K` superestima a precisão porque dobras de CV repetida não são independentes (Nadeau–Bengio, ausente do material). Concordância entre as três é o que torna a conclusão robusta |
+| 2026-08-11 | 7 | 🔑 **Tuning da LogReg: ganho ZERO — o default já era o pico da grade** (0,6904) | contraparte do achado da Etapa 6: a regularização move o número onde ela estava ausente (ensembles até a pureza), não num modelo que a biblioteca já entrega regularizado |
+| 2026-08-11 | 7 | Eixo `penalty` substituído por **`l1_ratio`** com `solver='saga'` nos três pontos | o sklearn 1.8 depreciou `penalty` (remoção em 1.10); `saga` mantém a função objetivo constante ao longo do eixo, enquanto `liblinear` penalizaria também o intercepto |
+| 2026-08-11 | 7 | Grade do HGB **estendida** para onde o aviso de borda apontou (`max_leaf_nodes` até 2) | aviso que não gera ação é decoração. Resultado: a 1-SE desceu para o toco de decisão e continua na borda — terceira medição de que o sinal do Telco é simples |
+| 2026-08-11 | 7 | 🚨 **Viés de seleção medido com grupo de controle**, não só declarado | o campeão (0 candidatos) cai 0,0258 da CV para a validação; a LogReg (18) cai o mesmo; o HGB (40) cai 0,0384. O excedente cresce com a grade, como a aula prevê — e inverteu o ranking dos finalistas |
+| 2026-08-11 | 7 | **Nunca reportar o pico da grade como generalização** — número da documentação sai da validação | o pico do HGB (0,7007) anunciaria +0,0088 sobre o campeão; o número honesto (0,6589) é −0,0057. Diferença de 0,042, sem nenhum sintoma que a denuncie |
+| 2026-08-11 | 7 | Teste **pareado** (t e Wilcoxon) sobre as 15 dobras, como evidência corroborante | HGB vence em 13/15 dobras com p<0,001 e mesmo assim perde na validação: significância e relevância são perguntas diferentes, e o pareamento tem poder para detectar +0,011, que a operação não distingue de zero |
+| 2026-08-11 | 7 | **Campeão mantido** (LogReg default); config 1-SE não adotada apesar de a regra apontá-la | empate na validação (−0,0026) contra custo concreto: a margem do gate cairia para 0,0020, menos que a folga de 0,005 reservada à variação entre plataformas |
+| 2026-08-11 | 7 | **Gate do CI mantido em 0,66** | ele acompanha o campeão, e o campeão não mudou. Subir o piso sem modelo melhor é obstáculo arbitrário; a regra continua sendo que ele sobe quando o campeão subir |
+| 2026-08-11 | 7 | `Total Charges` confirmada redundante por um **terceiro método independente** (L1 zerou) | correlação 0,9996 (EDA) + 7º na permutação (Etapa 6) + coeficiente zero (Etapa 7). Mantida no contrato v1 porque remover não muda métrica: CV 0,6883 × 0,6904 |
+| 2026-08-11 | 7 | Etapa 8 comparará o MLP contra o **HGB tunado**, não contra a configuração de referência | comparar a rede com um boosting mal ajustado repetiria o erro que o gate de justiça da Etapa 6 existe para impedir |
