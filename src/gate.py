@@ -30,6 +30,23 @@ from src.preprocess import construir_pipeline
 from src.train import construir_modelo
 
 
+def aprovado(pr_auc: float, brier: float) -> tuple[bool, str]:
+    """A regra do gate, isolada do treino para poder ser testada.
+
+    DUAS condições simultâneas, não uma. Desempenho (o modelo ordena bem?) e
+    calibração (a probabilidade significa alguma coisa?) respondem a perguntas
+    diferentes, e a Etapa 6 mediu que um modelo pode melhorar numa e piorar na
+    outra. Como a fila de retenção é ordenada por P(churn) × CLTV, a
+    probabilidade é multiplicada por reais — descalibrar desloca a ordenação
+    sem mexer na PR-AUC, e o CI ficaria verde enquanto o custo sobe.
+    """
+    if pr_auc < config.GATE_PR_AUC_MIN:
+        return False, f"PR-AUC {pr_auc:.4f} < {config.GATE_PR_AUC_MIN:.4f}"
+    if brier > config.GATE_BRIER_MAX:
+        return False, f"Brier {brier:.4f} > {config.GATE_BRIER_MAX:.4f}"
+    return True, ""
+
+
 def main() -> int:
     np.random.seed(config.SEED)
     dados = data.dividir()
@@ -45,28 +62,32 @@ def main() -> int:
     m = evaluate.avaliar(dados.validacao.y, p, limiar=custo["limiar_otimo"])
 
     piso = config.GATE_PR_AUC_MIN
+    teto_brier = config.GATE_BRIER_MAX
     obtido = m["pr_auc"]
-    passou = obtido >= piso
+    brier = m["brier"]
+    passou, motivo = aprovado(obtido, brier)
 
     print(f"Gate de promoção — modelo de referência: {config.GATE_MODELO_REFERENCIA}")
     print(f"  dataset sha256 : {dados.sha256[:16]}…")
     print(f"  n_features     : {len(config.FEATURES)}")
-    print(f"  PR-AUC (val)   : {obtido:.4f}")
-    print(f"  piso exigido   : {piso:.4f}")
-    print(f"  margem         : {obtido - piso:+.4f}")
+    print(f"  PR-AUC (val)   : {obtido:.4f}  (piso {piso:.4f}, "
+          f"margem {obtido - piso:+.4f})")
+    print(f"  Brier (val)    : {brier:.4f}  (teto {teto_brier:.4f}, "
+          f"margem {teto_brier - brier:+.4f})")
     print(f"  recall@10%     : {m['recall_at_10']:.3f} "
           f"({m['recall_at_10_pct_teto']:.1%} do teto estrutural)")
     print(f"  custo do erro  : R$ {m['custo_erro_brl']:,.0f} "
           f"(no limiar de operação {custo['limiar_otimo']:.2f})")
 
     if not passou:
-        print(f"\n❌ GATE REPROVADO: {obtido:.4f} < {piso:.4f}. Nada é promovido.")
-        print("   Se a queda for esperada (mudou feature, dado ou modelo), o piso em")
-        print("   config.GATE_PR_AUC_MIN precisa ser revisto NUM COMMIT PRÓPRIO, com")
-        print("   justificativa — não afrouxado de passagem para o CI ficar verde.")
+        print(f"\n❌ GATE REPROVADO: {motivo}. Nada é promovido.")
+        print("   Se a queda for esperada (mudou feature, dado ou modelo), o limite em")
+        print("   config.GATE_PR_AUC_MIN / GATE_BRIER_MAX precisa ser revisto NUM COMMIT")
+        print("   PRÓPRIO, com justificativa — não afrouxado de passagem para ficar verde.")
         return 1
 
-    print(f"\n✅ GATE APROVADO: {obtido:.4f} >= {piso:.4f}")
+    print(f"\n✅ GATE APROVADO nos dois eixos: PR-AUC {obtido:.4f} >= {piso:.4f} "
+          f"e Brier {brier:.4f} <= {teto_brier:.4f}")
     return 0
 
 

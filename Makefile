@@ -4,7 +4,7 @@
 # repositório e reproduz seu melhor modelo com um comando?". Se a resposta mora
 # na cabeça de quem escreveu, a reprodutibilidade é declarativa, não real.
 
-.PHONY: help setup exige-venv lint test ci gate eda baseline comparacao finalistas tuning limpar
+.PHONY: help setup exige-venv lint test ci gate eda baseline comparacao finalistas tuning mlp limpar
 
 # Os alvos usam os binários DO VENV, não os do shell. Motivo medido em 11/08/2026:
 # `make ci` fora do venv ativado pegava o ruff GLOBAL do sistema (0.6.4) em vez do
@@ -58,6 +58,9 @@ finalistas:  ## Etapa 6 — finalistas na validação: limiar, Brier e importân
 
 tuning:  ## Etapa 7 — grid (LogReg) + random search (HGB) com regra 1-SE
 	$(PY) -m src.tuning
+
+mlp:  ## Etapa 8 — MLP em PyTorch (grade + 5 seeds + validação)
+	$(PY) -m src.mlp
 
 limpar:  ## Remove caches e saídas derivadas (data/raw NUNCA é tocado)
 	rm -rf .pytest_cache .ruff_cache **/__pycache__ src/__pycache__ tests/__pycache__

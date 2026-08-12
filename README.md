@@ -71,7 +71,7 @@ GitHub Actions · Docker
 
 ```bash
 make setup      # venv + versões travadas
-make ci         # lint + 33 testes + gate de promoção — o mesmo que o CI roda
+make ci         # lint + 54 testes + gate de promoção — o mesmo que o CI roda
 make help       # todos os alvos
 ```
 
@@ -82,8 +82,8 @@ Prova real de reprodutibilidade: clonar numa máquina limpa e obter **o número 
 
 | Job | Faz | Falha quando |
 |---|---|---|
-| **QA** | `ruff check` + `pytest` (33 testes) | lint sujo ou qualquer teste vermelho |
-| **Gate de promoção** | treina o modelo de referência e mede na **validação** | PR-AUC < `config.GATE_PR_AUC_MIN` (0,66) |
+| **QA** | `ruff check` + `pytest` (54 testes) | lint sujo ou qualquer teste vermelho |
+| **Gate de promoção** | treina o modelo de referência e mede na **validação**, em **dois eixos** | PR-AUC < 0,66 **ou** Brier > 0,14 |
 
 Três decisões que valem a leitura, todas em `.github/workflows/ci.yml` e no decision log:
 
@@ -93,6 +93,10 @@ Três decisões que valem a leitura, todas em `.github/workflows/ci.yml` e no de
   enunciado da disciplina.
 - **O piso é absoluto (0,66), não relativo.** Um gate do tipo *"≥ 80% do baseline"* aceitaria
   0,53 — pior que modelos que já foram rejeitados.
+- **São dois eixos, não um: desempenho E calibração.** Um gate só de PR-AUC aprova o modelo que
+  ordena igual e calibra pior — e como a fila é ordenada por `P(churn) × CLTV`, a probabilidade é
+  multiplicada por reais. Os dois limites já foram verificados **reprovando**, porque gate que
+  nunca falhou é decoração.
 - **Continuous Delivery, não Deployment.** O último passo para produção é humano, porque a
   predição dispara ação comercial com custo real. O job de registro no Model Registry
   ainda **não** existe, e o porquê está comentado no próprio workflow: sem backend persistente
@@ -111,10 +115,10 @@ Três decisões que valem a leitura, todas em `.github/workflows/ci.yml` e no de
 | 4 · Feature Engineering | ✅ concluída — §3 · 4 features medidas por ablação e **todas descartadas** |
 | 5 · Seleção de features | ✅ concluída — §4 · **19 → 13 features**, por custo operacional |
 | 6 · Comparação de algoritmos | ✅ concluída — §5b · **empate técnico** entre LogReg, HGB e RF (0,07 dp) |
-| 7 · Tuning | ⬜ — finalistas: LogReg e HistGradientBoosting |
-| 8 · MLP em PyTorch | ⬜ |
+| 7 · Tuning | ✅ concluída — §5c · **ganho zero**: o default da LogReg já era o pico da grade |
+| 8 · MLP em PyTorch | ✅ concluída — §5d · **a rede não superou** (0,6615 × 0,6646), e a regra 1-SE elegeu profundidade **zero** |
 | 9 · Pipeline serializado + API | ⬜ |
-| 9.5 · CI/CD | 🟡 **parcial** — QA + gate de promoção rodando; falta o registro (depende da Etapa 9) |
+| 9.5 · CI/CD | 🟡 **parcial** — QA + gate de dois eixos rodando; falta o registro (depende da Etapa 9) |
 | 10 · Monitoramento | ⬜ |
 | 10.5 · Governança e fairness | ⬜ |
 | 11 · Documentação | ⬜ |

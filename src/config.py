@@ -122,4 +122,25 @@ KS_OPERACIONAIS = [0.10, 0.20]
 # ⚠️ Quando o campeão mudar (Etapas 7/8), este número sobe junto. Gate que não
 # acompanha o campeão vira decoração.
 GATE_PR_AUC_MIN = 0.66
+
+# Segundo eixo do gate — CALIBRAÇÃO (item 41 do revisita, M02-A06 §5).
+#
+# Um gate de um eixo só aprova um modelo que subiu a PR-AUC e piorou o Brier —
+# e isso não é hipótese: a Etapa 6 mediu que os dois podem andar em direções
+# opostas (ranking bom com probabilidade descalibrada). O estrago é silencioso:
+# probabilidade deslocada => o limiar de operação corta a fila no lugar errado
+# => mais custo em reais, com o CI verde. Contratos reais de detecção
+# especificam DUAS condições simultâneas ("sensibilidade >= X E especificidade
+# >= Y") justamente por isso.
+#
+# Importa aqui porque a fila de retenção é ordenada por P(churn) x CLTV: a
+# probabilidade é MULTIPLICADA por um valor em reais, então ela precisa
+# significar alguma coisa, não só ordenar.
+#
+# 0,14 com o campeão em 0,1339: a mesma lógica de folga do piso de PR-AUC.
+# Medidos na validação até aqui: LogReg 0,1339 · MLP (32,) 0,1344 ·
+# HGB tunado 0,1351 · MLP 1-SE 0,1354 — nenhum barrado hoje, e é justamente
+# por estar barato que o eixo entra antes de precisar dele.
+GATE_BRIER_MAX = 0.14
+
 GATE_MODELO_REFERENCIA = "logreg"

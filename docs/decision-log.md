@@ -1030,13 +1030,280 @@ tinha medido: neste dataset, podar não custa e não ganha em métrica.
 
 ---
 
+## 5d. Etapa 8 — MLP em PyTorch
+
+### ⚠️ PRÉ-REGISTRO — escrito ANTES de rodar (11/08/2026)
+
+Mesmo protocolo de honestidade da Etapa 7: as previsões abaixo estão no repositório **antes** da
+primeira execução. Previsão confirmada é evidência de método; previsão escrita depois do resultado
+é narrativa, e a diferença entre as duas some no texto final se ninguém marcar a data.
+
+| # | Previsão | Por que | Como seria refutada |
+|---|---|---|---|
+| 1 | **O MLP não supera o campeão** (0,6646 na validação) nem o HGB tunado. O delta cabe dentro de 1 desvio entre folds (0,019–0,024) | o material da disciplina (M02-A04, pág. 23) afirma que ensembles de árvores são estado da arte em tabular, *"superando inclusive redes neurais profundas"*. Somam-se **três** medições próprias na mesma direção: gap 0,005 (LogReg) × 0,083 (boosting) na Etapa 6; a FE da Etapa 4 sem efeito; e a 1-SE do HGB descendo até o **toco de 2 folhas** na Etapa 7 | MLP acima do campeão por **mais de 1 dp** na CV **e** na validação. Isso derrubaria o achado *"o sinal é essencialmente linear no logit"* que hoje tem três confirmações |
+| 2 | **O MLP de ZERO camadas ocultas reproduz a LogReg** (CV ~0,690, dentro de ±0,005) | não é analogia: com uma camada linear e `BCEWithLogitsLoss`, o objeto **é** uma regressão logística (M02-A05, pág. 12). Mesma perda, mesma família de funções, mesmo pré-processamento | se divergir mais que isso, o problema é a **minha** implementação (otimizador, épocas, escala), não um achado sobre os dados. Esta previsão é o **teste de sanidade do experimento inteiro** |
+| 3 | **O desvio entre seeds será menor que o desvio entre folds** (0,0188–0,0236), mas não nulo | a superfície de erro é não-convexa e os pesos partem de inicialização aleatória — variância que nenhum modelo do repo tinha (LogReg é convexa; árvores têm `random_state`). Com 1 camada e um problema fácil, espera-se que os mínimos sejam parecidos | se o desvio entre seeds for **da mesma ordem** do desvio entre folds, então nenhum número de seed única sustenta conclusão nesta etapa — e o protocolo da Etapa 6 teria de ganhar a dimensão seed (item 36) |
+| 4 | **A arquitetura escolhida pela 1-SE será pequena** (1 camada, ≤16 neurônios) e o `weight_decay` não será o menor da grade | 4.225 amostras de treino contra 28 colunas: uma camada de 32 já são ~950 pesos, **4 amostras por parâmetro**. O teorema da aproximação universal garante que a capacidade *existe*, e é silencioso sobre ela ser *encontrável* e *necessária* — com o sinal medidamente simples, `hidden_layer_sizes` é eixo de **regularização** | arquitetura grande vencendo por mais de 1 dp indicaria interação que nem a árvore nem a FE encontraram |
+| 5 | **As 4 features da Etapa 4 continuam sem ajudar** (item 16) | elas não criaram informação — duas eram combinação linear de dummies já presentes. E o argumento "a rede aprende interação sozinha" corta nos dois sentidos: se a interação valesse algo, o MLP a acharia sem a feature | ganho > 1 dp com `--features` ligadas seria a primeira evidência a favor delas em três medições |
+| 6 | **Brier do MLP na mesma faixa dos demais** (0,133–0,140) | os finalistas da Etapa 7 ficaram em 0,1339–0,1351 e PR-AUC e Brier andaram juntos. Risco conhecido: o early stopping por PR-AUC otimiza **ordenação**, e nada garante calibração | Brier acima de 0,14 com PR-AUC igual seria o caso do *gate de um eixo só* (item 41) acontecendo de verdade — e é exatamente por isso que o segundo eixo entra **nesta** etapa, antes de o MLP ser avaliado |
+
+### Decisões de protocolo tomadas antes da execução
+
+1. **O MLP entra como estimador do MESMO `Pipeline`** (`escalonar=True`, `encoding="onehot"`, 13
+   features), sob a **mesma CV estratificada repetida 5×3** com a **mesma seed** das Etapas 6 e 7.
+   Não é conveniência de código: é a condição para o número ser comparável com a tabela existente
+   e para o teste pareado nas mesmas 15 dobras vir de graça. Um MLP avaliado sob outro protocolo
+   produziria uma linha que não conversa com nenhuma das anteriores.
+2. **Isto torna a Etapa 8 um experimento controlado, e é o argumento mais forte da etapa.** Entre a
+   LogReg e o MLP não muda a perda (log-verossimilhança da logística **é** a entropia cruzada), nem
+   a forma da saída, nem o encoding, nem o pré-processamento — muda **uma variável só: a
+   profundidade**. Logo o delta LogReg → MLP mede, isolada, quanta não-linearidade existe no Telco.
+   RF e HGB trocam a família inteira de uma vez, e é por isso que o empate da Etapa 6 é ambíguo
+   sobre *o que* empatou. O MLP de profundidade 0 entra na grade como **controle desse controle**.
+3. **Early stopping por PR-AUC numa validação interna estratificada, extraída do treino** (15%),
+   nunca na validação da Etapa 2. Duas razões: (a) `MLPClassifier(early_stopping=True)` pontua com
+   `accuracy_score` no fonte e **não expõe `scoring`** — seria *otimizar a métrica errada dentro do
+   laço de treino*, sem log nem warning, num problema de prevalência 26,5% e custo 3:1; (b) parar o
+   treino olhando a validação faria do número de épocas mais um parâmetro escolhido nela, que é
+   precisamente o viés que a Etapa 7 mediu com grupo de controle. Custo aceito: cada fit vê 15%
+   menos dados que os demais candidatos — desvantagem **contra** o MLP, declarada.
+4. **Os pesos restaurados são os da melhor época, não os da última.** Parar por paciência e ficar
+   com o estado final entregaria um modelo pior que o que o próprio critério de parada elegeu.
+5. **`random_state` é fator do experimento** (item 36): o finalista roda com **5 seeds**, e o desvio
+   entre elas é reportado ao lado do desvio entre folds. Comparar uma média (LogReg, determinística)
+   com um sorteio (MLP de seed única) seria comparar réguas diferentes.
+6. **CPU, `torch.set_num_threads(1)`.** Não é limitação: com 4.225×28 o dado não paga a transferência
+   para a GPU, e single-thread remove a não-determinismo da ordem de redução — reprodutibilidade é
+   requisito registrado, não preferência.
+7. **O adversário é o HGB tunado da Etapa 7** (`max_leaf_nodes=2`, `learning_rate≈0,120`,
+   `min_samples_leaf=80`, `l2=1,0`), não a configuração de referência da Etapa 6. Comparar a rede
+   com um boosting mal ajustado repetiria o erro que o gate de justiça da Etapa 6 existe para impedir.
+
+### Resultado — CV no treino (15 arquiteturas, protocolo idêntico ao das Etapas 6 e 7)
+
+`hidden` × `weight_decay`, 15 dobras por configuração, 42 segundos no total.
+
+| `hidden` | `weight_decay` | PR-AUC | ±dp | treino | gap | |
+|---|---|---|---|---|---|---|
+| `(32,)` | 0,010 | **0,6858** | 0,0211 | 0,6924 | 0,0066 | ← pico |
+| `(16,)` | 0,001 | 0,6857 | 0,0230 | 0,6959 | 0,0102 | |
+| `(16,16)` | 0,010 | 0,6857 | 0,0221 | 0,6914 | 0,0057 | |
+| `(8,)` | 0,001 | 0,6846 | 0,0255 | 0,6944 | 0,0098 | |
+| `()` | 0,000 | 0,6837 | 0,0217 | 0,6877 | 0,0040 | ← controle |
+| `()` | 0,010 | 0,6816 | 0,0236 | 0,6840 | 0,0024 | ← **escolha 1-SE** |
+| `(16,16)` | 0,000 | 0,6724 | 0,0306 | 0,6834 | 0,0110 | pior da grade |
+
+**A grade inteira cabe em 0,0134**, contra desvio entre folds de 0,021–0,031. **14 das 15
+configurações entram no envelope 1-SE** nas duas leituras estreitas, e **as 15** no envelope do
+desvio cheio. Traduzindo: arquitetura nenhuma se distingue de outra neste dataset.
+
+### 🎯 Achado nº 1 — a regra 1-SE, aplicada DENTRO da família das redes, escolheu profundidade zero
+
+A 1-SE elegeu `hidden=()` — que não é uma rede: é a regressão logística que está no repositório
+desde a Etapa 3. Não é falha da regra nem do código; é a regra funcionando e dizendo que **nenhuma
+quantidade de profundidade se paga aqui**.
+
+É a **quarta medição independente** da mesma conclusão, e a mais forte, porque desta vez quem
+falhou foi a família de funções mais flexível de todas:
+
+| # | Etapa | Medição | O que disse |
+|---|---|---|---|
+| 1 | 4 | FE com razões e binning: +0,0003 contra ruído de 0,0280 | não há não-linearidade a entregar de mão beijada |
+| 2 | 6 | gap treino→CV: LogReg 0,005 × boosting 0,083 | os não-lineares têm liberdade funcional e não acham o que fazer com ela |
+| 3 | 7 | a 1-SE do HGB desce ao **toco de 2 folhas** | o modelo-base quer ser o mais fraco possível: o sinal é aditivo |
+| 4 | **8** | a 1-SE do MLP desce à **profundidade 0** | com capacidade universal disponível, a escolha ótima é não usá-la |
+
+> **Consequência para o relatório e para o vídeo:** *"o sinal do Telco é essencialmente linear no
+> logit"* deixou de ser interpretação de um resultado e passou a ser previsão confirmada por quatro
+> instrumentos que não compartilham mecanismo — engenharia de features, decomposição viés-variância,
+> busca em boosting e busca em rede neural.
+
+**Consequência prática:** o entregável e o resultado metodológico divergem. A fase exige uma rede,
+e um MLP sem camada oculta é o baseline com outro nome. Por isso os **dois** seguem avaliados: a
+escolha da 1-SE (o achado) e a melhor configuração **com** camada oculta, `(32,)` com
+`weight_decay=0,01` (o entregável).
+
+### 🚨 Achado nº 2 — o controle de profundidade zero NÃO reproduziu a LogReg, e a decomposição é o resultado
+
+A previsão nº 2 dizia ±0,005. Medido: **−0,0067**. Fora da previsão, e a tentação seria escolher
+uma explicação. Mas **duas** coisas diferem entre a LogReg do sklearn e o `MLPTorch(hidden=())`,
+não uma — e um terceiro modelo separa as duas:
+
+| | Modelo | CV | Leitura |
+|---|---|---|---|
+| (a) | LogReg sklearn, **100%** do fold | 0,6904 | a referência das Etapas 6 e 7 |
+| (b) | LogReg sklearn, **mesmos 85%** | 0,6890 | **−0,0014 = o preço do early stopping em dados** |
+| (c) | `MLPTorch hidden=()`, mesmos 85% | 0,6837 | **−0,0053 = o efeito do otimizador** |
+
+O early stopping **não é grátis**: ele reserva 15% do treino para uma validação interna que a
+LogReg não precisa ter. Isso é uma desvantagem **estrutural** do MLP neste desenho, e está declarada
+em vez de embutida no resultado. O restante (−0,0053, ainda dentro do desvio entre folds) é
+Adam com parada por PR-AUC contra LBFGS rodando até convergir com L2 — otimizadores diferentes
+sobre a **mesma** perda e a **mesma** família de funções.
+
+> A lição é de método, não de MLP: **quando dois fatores mudam juntos, dois números não decidem
+> nada.** O terceiro modelo custou dez linhas e transformou uma previsão errada num achado com
+> mecanismo identificado.
+
+### 🔑 Achado nº 3 — a variância de seed existe, é minúscula, e o modelo CONVEXO variou mais
+
+O item 36 perguntava se o protocolo da Etapa 6 precisaria da dimensão seed. Medido, com o mesmo
+protocolo, cinco seeds cada:
+
+| Regime | Configuração | PR-AUC (média entre seeds) | desvio entre **seeds** | × desvio entre **folds** (0,0215) |
+|---|---|---|---|---|
+| não-convexo | `(32,)`, wd 0,01 | 0,6858 | **0,0008** | **0,04×** |
+| convexo | `()`, wd 0,01 | 0,6760 | 0,0035 | 0,13× |
+
+**Resposta ao item 36: não.** A variância de inicialização é **uma ordem de grandeza menor** que a
+variância de partição — mas isso é uma *medição*, não era a intuição: o hands-on do XOR falhava em
+**14%** das inicializações. A diferença é o problema: numa superfície com mínimos locais ruins, a
+seed decide; num problema quase linearmente separável no logit, todas as inicializações convergem
+para soluções equivalentes. **A conclusão do XOR não transferia, e só se sabe qual dos dois casos é
+o nosso medindo.**
+
+⚠️ **E o resultado contraintuitivo é o mais instrutivo:** a rede **com** camada oculta variou
+**menos** que a configuração sem camada nenhuma. A explicação é que "variância de seed" agrega
+**três** fontes — inicialização dos pesos, ordem dos minibatches e o split da validação interna — e
+sem camada oculta o problema volta a ser **convexo**, então não sobra mínimo local: o que resta é
+justamente o split interno e o ponto de parada. Chamar os 0,0035 de "variância de inicialização"
+seria nomear errado o que foi medido.
+
+Na mesma unidade da Etapa 6 (desvio da probabilidade prevista por cliente): **±0,0094** entre seeds,
+contra ±0,0438 da floresta e ±0,2462 da árvore única sob reamostragem do treino.
+
+### Achado nº 4 — a profundidade não ganha nem *consistentemente*
+
+Teste pareado nas mesmas 15 dobras, rede `(32,)` − LogReg: **Δ −0,0046**, a rede vence em **5 de
+15** dobras, t pareado **p = 0,064**, Wilcoxon **p = 0,095**.
+
+O contraste com a Etapa 7 é o que dá o significado. Lá o HGB vencia em **13/15 com p < 0,001** e
+perdia na validação — *diferença consistente que não importa*. Aqui não há nem consistência: a
+profundidade produz uma diferença que o teste pareado, com todo o poder que o pareamento lhe dá,
+não distingue de zero. **É a medição direta da não-linearidade do Telco, e ela é indistinguível de
+zero.**
+
+### Validação — o número honesto (tocada uma vez, com as arquiteturas já escolhidas)
+
+| Modelo | PR-AUC | ±dp (seeds) | Brier | limiar | custo/ciclo | recall@10% |
+|---|---|---|---|---|---|---|
+| **CAMPEÃO** (LogReg, Etapa 3) | **0,6646** | — | **0,1339** | 0,29 | R$ 31.750 | 0,278 |
+| MLP `(32,)`, wd 0,01 | 0,6615 | 0,0040 | 0,1344 | 0,29–0,34 | **R$ 31.271** | 0,278 |
+| MLP 1-SE `()`, wd 0,01 | 0,6600 | 0,0026 | 0,1354 | 0,27–0,35 | R$ 31.499 | 0,278 |
+| HGB tunado (Etapa 7) | 0,6589 | — | 0,1351 | 0,32 | R$ 31.604 | 0,281 |
+
+**961 parâmetros para 4.225 amostras de treino: 4,4 amostras por parâmetro.** O número que explica
+por que os dois eixos da grade eram de regularização, e não de capacidade.
+
+### 🚨 Achado nº 5 — PR-AUC e custo em reais apontaram para lados OPOSTOS
+
+A rede fica **0,0031 abaixo** do campeão em PR-AUC e **R$ 479 abaixo** em custo por ciclo (−1,5%).
+Não é ruído: a dispersão do custo **entre as próprias seeds** da rede é R$ 203, menor que a
+diferença. É o cenário que a M02-A06 descreve (métrica agregada × regime operacional) acontecendo
+no projeto, **e na direção inversa da esperada** — o modelo pior na integral é melhor no ponto onde
+a operação vive.
+
+**A decisão segue a hierarquia declarada na Etapa 0, não a métrica que favorece o resultado:**
+
+| nível | métrica | quem ganha |
+|---|---|---|
+| 1 · seleção | PR-AUC | **campeão** (+0,0031, que é 0,15 dp — dentro do ruído) |
+| 2 · operação | recall@10% | **empate exato** (0,278 × 0,278) |
+| 3 · decisão | custo em R$ no limiar ótimo | rede (−R$ 479, −1,5%) |
+
+Escolher agora o nível 3 porque ele favorece a rede seria trocar de régua depois de ver o
+resultado — o mesmo pecado do `argmin` que a regra 1-SE existe para evitar. Duas ressalvas
+reforçam: o custo mínimo é obtido num **limiar escolhido na própria validação** (otimista por
+construção, para os dois modelos), e o nível 2 — o número que o gerente de retenção lê — empata na
+terceira casa. **Registrado como pendência com número medido**, não descartado: se a Etapa 9 ou 10
+mostrar que a decisão de negócio é custo, a rede volta com o número pronto.
+
+### Decisão da Etapa 8
+
+1. **O campeão permanece: LogReg nos defaults, 13 features, PR-AUC 0,6646 na validação.** O MLP foi
+   implementado, avaliado sob protocolo idêntico e **não superou** — nem a rede `(32,)` (−0,0031)
+   nem a configuração que a própria regra 1-SE elegeu (−0,0046). Previsão nº 1 **confirmada**.
+2. **A rede entregue como artefato da fase é a `(32,)` com `weight_decay=0,01`**, treinada com
+   `BCEWithLogitsLoss` + `Adam(1e-3)` e early stopping por PR-AUC. Ela é o entregável exigido; o
+   modelo em produção é o campeão, e a documentação diz as duas coisas com a mesma clareza.
+3. **O gate do CI não sobe** (item 35): ele acompanha o campeão, e o campeão não mudou. Terceira
+   etapa seguida em que o piso 0,66 se mantém por ausência de modelo melhor, não por inércia.
+4. **O gate ganhou o SEGUNDO EIXO** (item 41): `Brier ≤ 0,14` ao lado de `PR-AUC ≥ 0,66`, com o
+   novo eixo **verificado reprovando** (teto a 0,10 → `exit 1`). Entrou agora justamente porque a
+   calibração do MLP era desconhecida quando o eixo foi proposto — e um gate de eixo único aprovaria
+   um modelo que ordena igual e calibra pior, com o CI verde e o custo subindo.
+5. **Item 16 fechado: as 4 features da Etapa 4 continuam sem efeito** também no MLP (+0,0006, 0,03
+   dp). Terceira família de modelos a rejeitá-las. O argumento *"a rede aprende interação sozinha"*
+   corta nos dois sentidos: se a interação valesse algo, a rede a acharia **sem** a feature pronta.
+6. **O MLP não é dependência da API.** Como o modelo servido é a LogReg, a Etapa 9 não precisa de
+   `torch` em runtime — o que também reabre a discussão do item 33 (o CI instala ~800 MB de torch
+   em dois jobs para um modelo que não vai a produção).
+
+### Placar do pré-registro: 5 confirmadas, 1 refutada com mecanismo identificado
+
+| # | Previsão | Resultado |
+|---|---|---|
+| 1 | o MLP não supera o campeão | ✅ −0,0031 na validação; delta dentro de 1 dp |
+| 2 | profundidade 0 reproduz a LogReg em ±0,005 | ❌ **−0,0067** — refutada, e decomposta em −0,0014 (orçamento de dados) + −0,0053 (otimizador) |
+| 3 | desvio entre seeds < desvio entre folds | ✅ 0,04× (rede) e 0,13× (convexo) — confirmada com folga |
+| 4 | arquitetura pequena, `weight_decay` não mínimo | ✅ a 1-SE foi a **profundidade zero** com o maior `weight_decay` da grade |
+| 5 | as 4 features seguem inúteis | ✅ +0,0006 (0,03 dp) |
+| 6 | Brier em 0,133–0,140 | ✅ 0,1344 (rede) e 0,1354 (1-SE) |
+
+A refutada é a mais útil das seis: ela é a única que produziu um experimento novo.
+
+---
+
 ## 6. Decisão do modelo final
 
-- **Modelo escolhido:**
-- **Concorrentes e seus números:**
-- **Por que este, além da métrica** (interpretabilidade, latência, robustez, custo):
-- **O MLP superou os modelos clássicos?** ⬜ sim ⬜ não — *(um "não" documentado com honestidade
-  vale mais que um resultado forçado)*
+*(preenchida ao fim da Etapa 8 — a fase de modelagem está fechada; o teste segue intocado até a
+Etapa 11.)*
+
+- **Modelo escolhido:** **Regressão Logística** nos defaults do scikit-learn (`C=1,0`, `penalty` L2
+  — que são decisão da biblioteca, e por isso estão escritas aqui), 13 features, dentro de um
+  `Pipeline` com imputação, `OneHotEncoder` sem `drop` e `StandardScaler`.
+  **PR-AUC 0,6646 na validação** (piso da métrica: 0,2654), recall@10% 0,278 (73,8% do teto
+  estrutural), Brier 0,1339, limiar de operação **0,29**, custo do erro R$ 31.750 por ciclo contra
+  R$ 72.556 de não fazer nada.
+
+- **Concorrentes e seus números** (validação, mesmo protocolo, teste intocado):
+
+  | Modelo | Etapa | PR-AUC | Brier | custo/ciclo | recall@10% |
+  |---|---|---|---|---|---|
+  | **LogReg (escolhido)** | 3 | **0,6646** | 0,1339 | R$ 31.750 | 0,278 |
+  | LogReg 1-SE (`C=0,1`, L1) | 7 | 0,6620 | 0,1342 | R$ 31.326 | 0,283 |
+  | **MLP `(32,)` PyTorch** | 8 | 0,6615 | 0,1344 | R$ 31.271 | 0,278 |
+  | MLP 1-SE `()` | 8 | 0,6600 | 0,1354 | R$ 31.499 | 0,278 |
+  | HGB tunado | 7 | 0,6589 | 0,1351 | R$ 31.604 | 0,281 |
+  | Random Forest regularizada | 6 | — (eliminada por dominância) | | | |
+
+  **Seis candidatos em 0,0057 de PR-AUC**, contra desvio entre folds de 0,019–0,024. Não é
+  indecisão: é a medição de que a escolha se desloca para critérios não-métricos.
+
+- **Por que este, além da métrica:**
+  1. **Regra 1-SE** (Hastie et al., 2009): o mais simples dentro de 1 erro padrão do melhor. Ele
+     entra no envelope nas **três** leituras da dispersão, e a regra foi aplicada — e pré-registrada
+     — antes de os resultados existirem.
+  2. **Interpretabilidade que vira ação:** 13 coeficientes com tabela de odds ratios contra 961
+     parâmetros da rede. O time de retenção precisa saber *por que* o cliente está na fila, e a
+     LGPD Art. 20 dá direito a explicação — SHAP sobre a rede seria uma reconstrução do que a
+     LogReg entrega direto.
+  3. **Custo operacional:** sem `torch` em produção, latência menor, artefato menor, menos
+     superfície de falha na API.
+  4. **Precedente citável:** Netflix Prize — o ensemble vencedor de US$ 1M melhorou o RMSE em
+     10,05% e **nunca foi implantado**, porque o ganho marginal não pagou a complexidade. Aqui o
+     ganho marginal é de sinal **negativo**.
+  5. ⚠️ **O que pesa contra, registrado:** a rede tem custo em reais R$ 479 menor por ciclo. A
+     hierarquia de métricas da Etapa 0 (PR-AUC seleciona · recall@k reporta · custo decide o limiar)
+     foi declarada antes e é o que decide — mas o número fica no backlog em vez de ser omitido.
+
+- **O MLP superou os modelos clássicos?** ⬜ sim · ☑️ **não** — e o "não" tem quatro medições
+  independentes por trás, todas com o mesmo diagnóstico: *o sinal do Telco é essencialmente linear
+  no logit, e capacidade adicional não encontra o que fazer com a liberdade que ganha.* A rede foi
+  implementada, avaliada sob protocolo idêntico ao dos demais candidatos e reportada com o número
+  que deu. A literatura de dados tabulares — **inclusive o material desta disciplina** (M02-A04,
+  pág. 23) — prevê exatamente isso, e a previsão estava escrita no repositório antes da primeira
+  execução.
 
 ---
 
@@ -1127,3 +1394,16 @@ tinha medido: neste dataset, podar não custa e não ganha em métrica.
 | 2026-08-11 | 7 | **Gate do CI mantido em 0,66** | ele acompanha o campeão, e o campeão não mudou. Subir o piso sem modelo melhor é obstáculo arbitrário; a regra continua sendo que ele sobe quando o campeão subir |
 | 2026-08-11 | 7 | `Total Charges` confirmada redundante por um **terceiro método independente** (L1 zerou) | correlação 0,9996 (EDA) + 7º na permutação (Etapa 6) + coeficiente zero (Etapa 7). Mantida no contrato v1 porque remover não muda métrica: CV 0,6883 × 0,6904 |
 | 2026-08-11 | 7 | Etapa 8 comparará o MLP contra o **HGB tunado**, não contra a configuração de referência | comparar a rede com um boosting mal ajustado repetiria o erro que o gate de justiça da Etapa 6 existe para impedir |
+| 2026-08-11 | 8 | Expectativas da Etapa 8 **pré-registradas** (6 previsões + critério de refutação de cada uma) | placar final 5 confirmadas, 1 refutada. A refutada foi a mais útil: produziu o experimento do controle de orçamento, que não existiria se a previsão tivesse acertado |
+| 2026-08-11 | 8 | MLP embrulhado como **estimador do scikit-learn** e rodado no MESMO `Pipeline`, CV 5×3 e seed das Etapas 6 e 7 | é a condição para o número conversar com a tabela existente; e o teste pareado nas mesmas 15 dobras sai de graça porque a CV tem seed fixa |
+| 2026-08-11 | 8 | Early stopping por **PR-AUC em validação interna extraída do treino**, nunca na validação da Etapa 2 | `MLPClassifier(early_stopping=True)` pontua por `accuracy_score` e não expõe `scoring`; e parar o treino olhando a validação faria do nº de épocas mais um parâmetro escolhido nela |
+| 2026-08-11 | 8 | Pesos restaurados são os da **melhor época**, não os da última | parar por paciência e ficar com o estado final entrega um modelo pior do que aquele que o próprio critério de parada elegeu — sem sintoma visível |
+| 2026-08-11 | 8 | 🎯 **A regra 1-SE, dentro da família das redes, elegeu profundidade ZERO** | quarta medição independente de que o sinal é linear no logit, e a mais forte: a família mais flexível de todas escolheu não usar a capacidade que tinha |
+| 2026-08-11 | 8 | Avaliar **dois** candidatos: a escolha da 1-SE e a melhor rede COM camada oculta | quando o resultado metodológico é "profundidade zero", entregável e achado divergem — reportar só um dos dois esconderia metade |
+| 2026-08-11 | 8 | 🚨 **Controle de orçamento** (`LogRegMesmoOrcamento`) criado para decompor a diferença do controle | dois fatores mudavam juntos (otimizador e os 15% que o early stopping consome); com dois números a atribuição seria escolha, não medida. Resultado: −0,0014 dados + −0,0053 otimizador |
+| 2026-08-11 | 8 | **Variância de seed medida nos dois regimes** (com e sem camada oculta), não em um só | "variância de inicialização" agrega três fontes; sem camada oculta o problema é convexo e não há mínimo local. O convexo variou MAIS (0,0035 × 0,0008), o oposto do que o nome sugere |
+| 2026-08-11 | 8 | **Resposta ao item 36: o protocolo da Etapa 6 NÃO precisa da dimensão seed** | desvio entre seeds é 0,04× o desvio entre folds. Mas é medição, não intuição: o XOR da M02-A05 falhava em 14% das inicializações — a conclusão de lá não transferia |
+| 2026-08-11 | 8 | **Campeão mantido; o MLP é entregue como artefato da fase, não como modelo de produção** | −0,0031 de PR-AUC e −0,0046 no pareado, sem consistência (5/15 dobras, p=0,064). Um "não" documentado vale mais que um resultado forçado |
+| 2026-08-11 | 8 | 🚨 **PR-AUC e custo em reais apontaram para lados opostos** — decidido pela hierarquia da Etapa 0 | a rede custa R$ 479 a menos por ciclo (maior que a dispersão entre suas seeds, R$ 203) e perde na métrica de seleção declarada. Trocar de régua depois de ver o resultado é o pecado que a 1-SE existe para evitar; o número foi ao backlog, não ao lixo |
+| 2026-08-11 | 8 | **Gate do CI ganhou o segundo eixo: `Brier ≤ 0,14`** (item 41), verificado reprovando | gate de um eixo aprova modelo que ordena igual e calibra pior — e a fila é ordenada por `P(churn) × CLTV`, então a probabilidade é multiplicada por reais. Entrou antes de ser necessário, que é quando é barato |
+| 2026-08-11 | 8 | **Item 16 fechado: as 4 features da Etapa 4 seguem sem efeito no MLP** (+0,0006) | terceira família de modelos a rejeitá-las. "A rede aprende interação sozinha" corta nos dois sentidos: se valesse algo, ela a acharia sem a feature pronta |
