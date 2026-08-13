@@ -25,7 +25,7 @@ from sklearn.metrics import average_precision_score
 from sklearn.model_selection import train_test_split
 from torch import nn
 
-from src import config, gate
+from src import config
 from src.mlp import LogRegMesmoOrcamento, MLPTorch, complexidade_mlp, grade_mlp
 
 
@@ -195,21 +195,3 @@ def test_grade_contem_o_controle_de_profundidade_zero():
     não-linearidade.
     """
     assert () in grade_mlp()["modelo__hidden"]
-
-
-def test_gate_exige_os_dois_eixos():
-    """Desempenho E calibração, não um dos dois (item 41 do revisita).
-
-    Um gate de eixo único aprova o modelo que sobe a PR-AUC e piora o Brier — e
-    a Etapa 6 mediu que isso é possível. O estrago é silencioso: probabilidade
-    deslocada => limiar corta a fila no lugar errado => mais custo em reais, com
-    o CI verde.
-    """
-    bom_prauc = config.GATE_PR_AUC_MIN + 0.01
-    bom_brier = config.GATE_BRIER_MAX - 0.01
-    assert gate.aprovado(bom_prauc, bom_brier)[0]
-    assert not gate.aprovado(config.GATE_PR_AUC_MIN - 0.01, bom_brier)[0]
-    # o caso que só o segundo eixo pega: ordena bem, calibra mal
-    passou, motivo = gate.aprovado(bom_prauc, config.GATE_BRIER_MAX + 0.01)
-    assert not passou
-    assert "Brier" in motivo

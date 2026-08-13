@@ -47,10 +47,14 @@ def aprovado(pr_auc: float, brier: float) -> tuple[bool, str]:
     return True, ""
 
 
-def main() -> int:
-    np.random.seed(config.SEED)
-    dados = data.dividir()
+def medir(dados: data.Dados) -> tuple[dict, dict]:
+    """Treina o modelo de referência e devolve (métricas, curva de custo).
 
+    Isolada de `main()` pelo mesmo motivo que `aprovado()`: para poder ser
+    chamada por um teste. É este o caminho ÚNICO que define "o campeão" — o
+    gate do CI e o teste de caracterização medem exatamente o mesmo objeto,
+    e não duas reconstruções mantidas iguais pela memória de quem edita.
+    """
     modelo, escalonar = construir_modelo(config.GATE_MODELO_REFERENCIA, None)
     pipe = construir_pipeline(modelo, escalonar=escalonar)
     pipe.fit(dados.treino.X, dados.treino.y)
@@ -59,7 +63,13 @@ def main() -> int:
     # função usa como referência: reportar custo a 0,5 daria um número que não
     # corresponde a nenhuma decisão que este projeto toma.
     custo = evaluate.curva_custo(dados.validacao.y, p)
-    m = evaluate.avaliar(dados.validacao.y, p, limiar=custo["limiar_otimo"])
+    return evaluate.avaliar(dados.validacao.y, p, limiar=custo["limiar_otimo"]), custo
+
+
+def main() -> int:
+    np.random.seed(config.SEED)
+    dados = data.dividir()
+    m, custo = medir(dados)
 
     piso = config.GATE_PR_AUC_MIN
     teto_brier = config.GATE_BRIER_MAX
