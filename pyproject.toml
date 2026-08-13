@@ -33,6 +33,17 @@ select = [
     "SIM",      # simplificações
     "NPY",      # armadilhas específicas de numpy
     "PD",       # pandas-vet
+    # RUF100 é o motivo de "RUF" estar aqui, e ele é META: acusa `# noqa` que não suprime
+    # nada — supressão apontando para regra fora deste `select`. Medido em 13/08/2026:
+    # havia DUAS (`# noqa: PLR0915` em mlp.py e tuning.py), ambas com justificativa escrita,
+    # ambas inertes. O estrago não é o comentário morto: elas SIMULAVAM um controle de
+    # tamanho de função que não existia — e uma terceira função do mesmo porte passou
+    # despercebida justamente porque a marcação parecia cobertura. Um `noqa` é uma
+    # afirmação sobre esta configuração; sem RUF100, ninguém verifica a afirmação.
+    "RUF",
+    # A regra que os dois `noqa` invocavam. Ligada para que eles digam a verdade — e para
+    # que a próxima função longa apareça em vez de depender de alguém lembrar.
+    "PLR0915",
 ]
 ignore = [
     "E501",     # comprimento de linha: o formatter cuida; travar aqui quebraria comentários longos
@@ -42,6 +53,12 @@ ignore = [
     # `random_state`. Trocar por um Generator local deixaria justamente essas partes livres —
     # e reprodutibilidade é requisito registrado na Etapa 9.5, não preferência de estilo.
     "NPY002",
+    # RUF001/002/003 acusam caractere Unicode "ambíguo" — aqui, `×` e `−` nas strings de
+    # relatório ("desvio ENTRE SEEDS 0,0012 × desvio ENTRE FOLDS", "diferença bruta (c)−(a)").
+    # São tipografia DELIBERADA na saída que um humano lê, não confusão com `x` e `-`: a
+    # regra existe contra homoglifos em IDENTIFICADORES, e nenhum destes é identificador.
+    # Mesma lógica do NPY002 — regra genérica certa, caso errado.
+    "RUF001", "RUF002", "RUF003",
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -51,7 +68,9 @@ ignore = [
 # PD101 pediria trocar `nunique() == 1` por uma forma mais eficiente; num script que roda
 # uma vez sobre 7.043 linhas, isso troca clareza por microssegundos. Reescrever código de
 # análise para agradar o linter é o rabo abanando o cachorro.
-"notebooks/*" = ["PD101"]
+# PLR0915 pela mesma razão: a EDA é um roteiro linear de 68 passos que se lê de cima a
+# baixo. Quebrar em funções para caber num limite esconderia a ordem, que é o conteúdo.
+"notebooks/*" = ["PD101", "PLR0915"]
 
 # --- Testes ----------------------------------------------------------------
 [tool.pytest.ini_options]

@@ -509,7 +509,7 @@ def main() -> None:  # noqa: PLR0915 — relatório linear; quebrar piora a leit
     for i in ordem:
         p = r["params"][i]
         marca = " ←1-SE" if i == i_1se else (" ←pico" if i == i_pico else "")
-        print(f"{str(p['modelo__hidden']):<10} {p['modelo__weight_decay']:>8.3f} "
+        print(f"{p['modelo__hidden']!s:<10} {p['modelo__weight_decay']:>8.3f} "
               f"{medias[i]:>8.4f} {dps[i]:>7.4f} {r['mean_train_score'][i]:>7.4f} "
               f"{r['mean_train_score'][i] - medias[i]:>7.4f}{marca}")
 
@@ -579,7 +579,7 @@ def main() -> None:  # noqa: PLR0915 — relatório linear; quebrar piora a leit
               f"(dp entre folds {s.dp_folds:.4f})")
     dp_seeds = float(df_seeds.pr_auc.std())
     dp_folds_medio = float(df_seeds.dp_folds.mean())
-    print(f"  rede {str(params_rede['hidden']):<8} (NÃO-CONVEXO): média "
+    print(f"  rede {params_rede['hidden']!s:<8} (NÃO-CONVEXO): média "
           f"{df_seeds.pr_auc.mean():.4f} ± {dp_seeds:.4f}")
     print(f"  desvio ENTRE SEEDS {dp_seeds:.4f} × desvio ENTRE FOLDS "
           f"{dp_folds_medio:.4f} = {dp_seeds / dp_folds_medio:.2f}×")
@@ -596,7 +596,7 @@ def main() -> None:  # noqa: PLR0915 — relatório linear; quebrar piora a leit
         # inicialização".
         df_seeds_1se = fase_seeds(X, y, cv, params_1se)
         dp_1se = float(df_seeds_1se.pr_auc.std())
-        print(f"\n  escolha 1-SE {str(params_1se['hidden']):<6} (CONVEXO): média "
+        print(f"\n  escolha 1-SE {params_1se['hidden']!s:<6} (CONVEXO): média "
               f"{df_seeds_1se.pr_auc.mean():.4f} ± {dp_1se:.4f}")
         print(f"    A rede varia {dp_seeds / dp_1se:.2f}× o convexo. Sem camada oculta")
         print("    não há mínimo local: o que resta é o split interno e a ordem dos lotes.")

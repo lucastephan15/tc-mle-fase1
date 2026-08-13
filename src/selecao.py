@@ -45,7 +45,7 @@ def secao(t: str) -> None:
     print(f"\n{'=' * 72}\n{t}\n{'=' * 72}")
 
 
-def main() -> None:
+def main() -> None:  # noqa: PLR0915 — relatório linear (seções A/B/C); quebrar piora a leitura
     dados = data.dividir()
     X, y = dados.treino.X, dados.treino.y
     base_m, base_s = cv(X, y)
