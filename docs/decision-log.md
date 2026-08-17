@@ -1325,6 +1325,107 @@ como transitiva do scikit-learn e agora é importado **diretamente** por `src/ar
 sklearn futuro trocar de serializador, o lock sairia sem joblib e nenhum artefato do histórico
 carregaria.
 
+### 9d · A API (17/08/2026)
+
+`src/api/` em três camadas — `schema.py` (contrato), `servico.py` (pontuar), `app.py` (HTTP) —,
+separadas por **uma razão para mudar**. O critério que decidiu a separação não foi estético:
+*isto fica testável sem subir servidor?* — os testes de limiar e de contrato de erro rodam contra
+o serviço e contra dublês, sem `TestClient` e sem tocar o disco.
+
+**Rotas:** `GET /health` · `POST /v1/predict` · `POST /v1/predict-batch`.
+
+#### O que o contrato de domínio fechou — os quatro casos que davam 200
+
+Com validação apenas de esquema (campo presente + castável para float), medido em 17/08/2026
+contra o campeão real, estes payloads eram **aceitos e prediziam normalmente**:
+
+| payload | antes | efeito medido na validação | agora |
+|---|---|---|---|
+| `Contract = "Vitalicio"` | 200 | 153 clientes (10,9%) trocam de lado no limiar | **422** |
+| `Tenure Months = -999` | 200 | P(churn) = 1,0000 nas 1.409 linhas; 878 (62,3%) cruzam o limiar | **422** |
+| `Monthly Charges = -999` | 200 | P(churn) = 0,0000 nas 1.409 linhas | **422** |
+| `Total Charges = 1e9` | 200 | P(churn) = 1,0000 nas 1.409 linhas | **422** |
+
+As 10 categóricas aceitavam lixo porque `handle_unknown="ignore"` faz o valor desconhecido virar
+**linha de zeros** — que para o modelo significa *"a categoria de referência"*, não *"não sei"*.
+Correto no treino, perigoso na inferência. `-999` não é hipótese: é a sentinela de nulo mais comum
+em sistema legado, que é quem consome uma API interna de churn.
+
+🔑 **O contrato é derivado do artefato, não de `config.py`** — 13 nomes e a ordem de
+`pipe.feature_names_in_`, 25 valores de `ohe.categories_` viram `Literal`, e as 3 numéricas ganham
+`Field(ge, le)`. Zero constante de coluna escrita à mão. ⚠️ As **faixas** são a exceção declarada:
+são decisão de negócio (0–120 meses · 0–200 · 0–12.000), folgadas de propósito, porque colar o `le`
+no máximo do treino (72 meses) rejeitaria um cliente legítimo de 73 — o alvo é `-999` e `1e9`, não
+a cauda. Um teste exige que **toda numérica do artefato tenha faixa declarada**, senão uma coluna
+nova entraria sem limite e em silêncio.
+
+#### As decisões de mecanismo, e uma incompatibilidade que só aparece implementando
+
+🚨 **Derivar o contrato do artefato (item 94) e carregar por `lifespan` (item 98a) são
+incompatíveis — e quem cede é o mecanismo.** O schema precisa do artefato **antes de as rotas
+existirem**; o `lifespan` roda depois. A solução foi a factory `criar_app(artefato)`, que carrega
+na **construção** do app: mais cedo que o `lifespan` e servindo ao mesmo propósito medido — o
+**deploy** paga os ~715 ms, não o primeiro cliente (383× contra `@lru_cache`, que não é
+carregamento antecipado e sim carregamento preguiçoso com memória). Ganho colateral: a factory
+recebe o artefato, então o teste monta o app sobre um artefato de fixture, e fica explícito que a
+API serve **um objeto específico**, não "o modelo" genericamente.
+
+| Decisão | Motivo medido |
+|---|---|
+| **`def`, nunca `async def`** em todas as rotas | vazão idêntica (203,1 × 206,4 ms — o GIL serializa), mas o atraso máximo do event loop vai de 32,58 ms para 206,28 ms = o lote inteiro. Quem fica preso na fila junto é o `GET /health` do orquestrador ⇒ healthcheck expira ⇒ container reiniciado no meio da campanha |
+| **`/predict-batch` é o endpoint principal** | 825×: 1.409 linhas custam 2,853 ms em lote e 2.353 ms uma a uma. O custo do sklearn é fixo por chamada (~1,67 ms); a linha marginal custa 2,0 µs. `/predict` é o caso de lote 1 |
+| **`max_length = 5.000`** no lote | lista sem teto é vetor de negação de serviço: o trabalho é síncrono e segura um worker. 5.000 ≈ 12 ms e cobre a carteira (7.043) em duas chamadas |
+| **`response_model` em todas as rotas** | o campo não declarado **não sai**, mesmo que o `return` o inclua (36 bytes × 374 bytes medidos). É a única defesa contra overexposure que não depende de alguém lembrar |
+| **`pd.DataFrame(linhas)`, com `by_alias=True`** | o `ColumnTransformer` seleciona por **nome**; `np.array([[...]])` fixaria a ordem no corpo da função, onde nada a verifica. Reordenar dois campos do schema — refatoração que nenhum linter barra — daria 200 OK com número errado. Há teste que embaralha as chaves do JSON |
+| **`predict_proba` + limiar do artefato** | `.predict()` aplica 0,5 implícito: R$ 39.296 × R$ 31.750 por ciclo, **R$ 7.546 e 83 churners**. A resposta leva probabilidade, decisão **e o limiar** — sem ele a decisão não é auditável depois |
+| **`Annotated[...]` em vez de `= Depends(...)`** | as duas formas são equivalentes para o FastAPI e só a primeira não dispara `B008`. Suprimir a regra seria trocar uma correção de duas palavras por uma afirmação sobre o linter que ninguém verifica |
+
+#### O vazamento de LGPD, fechado em duas peças (nenhuma basta sozinha)
+
+`extra="forbid"` impede que `CustomerID` entre em silêncio, **e concentra o vazamento**: o erro
+`extra_forbidden` devolve `loc: ["CustomerID"]` **e** `input: "3668-QPYBK"`. Quem fecha é o handler
+de `RequestValidationError`, que remove `input` e `ctx` e mantém `loc` (nome de campo não é dado
+pessoal). O mesmo handler cobre o 500: `str(e)` do sklearn cita o dado do cliente
+(`could not convert string to float: 'setenta reais'`). **Verificado nos 8 payloads inválidos:
+nenhum devolve valor do payload.** A resposta de sucesso também não ecoa a entrada — a correlação
+é pelo `request_id` gerado no servidor, que vai no corpo e no header `X-Request-ID`.
+
+#### `/health` que afirma algo
+
+Declara `status` (prontidão, lida do **objeto que serve**), `versao_modelo`, `artefato_sha256`,
+`n_features`, `limiar_operacao` e as versões de biblioteca. 🎯 **Verificado reprovando:** com o
+artefato apagado do disco, o processo **morre na inicialização** com mensagem acionável —
+ele não sobe e responde `healthy`, que é o comportamento que a composição das figuras da M04-A04
+produz. Subir degradado é escolher a falha silenciosa.
+
+#### 🚨 Achado novo: a predição não é bit-idêntica entre lote e unitário
+
+Pontuar as 1.409 linhas da validação **em lote** e **uma a uma** dá resultados diferentes em
+**495 linhas (35%)**, com diferença máxima de **2,2e-16** (um ulp) — é o BLAS tomando caminhos de
+vetorização diferentes conforme o número de linhas. **Zero clientes mudam de lado no limiar de
+0,29**, então não há efeito de negócio; mas a consequência de projeto fica registrada: a resposta
+para o mesmo cliente **não é reproduzível byte a byte** entre `/predict` e `/predict-batch`, logo
+nada rio abaixo pode comparar predições por igualdade exata (cache por hash, deduplicação,
+reconciliação do log da Etapa 10 — todos por tolerância). O teste de caracterização do artefato
+não é afetado, porque pontua sempre o mesmo lote.
+
+#### Escopo declarado (o que NÃO foi feito, e por quê)
+
+- **Sem autenticação** — limitação declarada na descrição da própria API e na documentação, não
+  omissão. A M04-A01 nomeia *"API interna sem proteção"* como anti-padrão, e a banca procura.
+- **`/docs` e `/openapi.json` abertos** — publicam 13 nomes de feature, 25 valores e 3 faixas.
+  Não é dado pessoal: é a descrição do modelo. Mantidos por ser API interna; `openapi_url=None` é
+  o que se faz quando a API sair da rede interna.
+- **Sem Strategy/Factory/Observer** — um endpoint de predição não passa no teste do próprio
+  padrão. Recusar o padrão é o conteúdo da aula sobre padrões.
+- **Sem log de inferência em JSONL** — é a Etapa 10. O `request_id` e o middleware que cronometra
+  (inclusive o 422) já são o gancho, e custam +13%.
+
+**20 testes novos** (81 na suíte, `make ci` verde) e a API verificada com **uvicorn real**, não só
+com `TestClient`: `/health` responde, `/v1/predict` devolve 0,3700 para o cliente de exemplo, e a
+latência local ficou em mediana 3,5 ms / p95 4,9 ms com 20 requisições sequenciais — número de
+desenvolvimento, não SLA (medida honesta exige carga concorrente).
+
 ---
 
 ## 6. Decisão do modelo final
@@ -1493,3 +1594,15 @@ Etapa 11.)*
 | 2026-08-17 | 9c | **Item 96(a) aplicado**: `InconsistentVersionWarning` como erro no `filterwarnings` | o `requirements.in` tinha a razão do pin escrita em comentário desde a Etapa 3 e nenhum mecanismo que a aplicasse. Uma linha, mesmo argumento do `ConvergenceWarning` |
 | 2026-08-17 | 9 | `httpx2` e `joblib` declarados no `requirements.in` | `httpx2` era **bloqueio**, não planejamento: sem ele o `TestClient` levanta `RuntimeError` e nenhum teste de rota roda (Starlette 1.6 pede `httpx2`, não `httpx`). `joblib` passou a ser import **direto** de `src/artefato.py` |
 | 2026-08-17 | 9c | ⚠️ **Pendência declarada para a 9f:** o artefato **não** é versionado no Git (`models/*` ignorado) | a imagem precisa dele e o clone não o traz. Ou o build promove (e o dado bruto LGPD entraria na imagem, o que a M03-A04 proíbe), ou o artefato é injetado como camada/volume. Decisão da 9f, registrada como pendência e não como esquecimento |
+| 2026-08-17 | 9d | **API em três camadas** (`schema` / `servico` / `app`), separadas por uma razão para mudar | o critério não é estético: os testes de limiar, contrato de erro e formato de resposta rodam contra o serviço e contra dublês, sem `TestClient` e sem tocar o disco |
+| 2026-08-17 | 9d | 🚨 **Contrato de entrada DERIVADO do artefato** (13 nomes + ordem, 25 valores em `Literal`, 3 faixas) | fecha os quatro payloads que davam **200 com predição corrompida**: `Contract` inexistente (153 clientes trocam de lado), `Tenure = -999` (P=1,0000 nas 1.409 linhas, 878 cruzam o limiar), `Monthly = -999`, `Total = 1e9`. Custo: 0,002 ms por requisição |
+| 2026-08-17 | 9d | ⚠️ **Faixas numéricas são decisão de negócio** (0–120 · 0–200 · 0–12.000), não o máximo do treino | colar o `le` em 72 meses rejeitaria cliente legítimo de 73. O alvo é a sentinela de nulo, não a cauda. Teste exige que toda numérica do artefato tenha faixa declarada |
+| 2026-08-17 | 9d | 🔑 **Derivar o contrato do artefato e carregar por `lifespan` são incompatíveis** — a factory `criar_app(artefato)` resolve | o schema precisa do artefato **antes de as rotas existirem**; o `lifespan` roda depois. A factory carrega ainda mais cedo e serve ao mesmo propósito medido (o deploy paga os ~715 ms, não o primeiro cliente — 383×) |
+| 2026-08-17 | 9d | **`def`, nunca `async def`**, em todas as rotas | vazão idêntica (o GIL serializa), mas o atraso do event loop vai de 32,58 ms para 206,28 ms = o lote inteiro. Quem fica preso junto é o `/health` do orquestrador ⇒ container reiniciado sob carga |
+| 2026-08-17 | 9d | **`/predict-batch` é o endpoint principal**, com `max_length=5.000` | 825× (2,853 ms × 2.353 ms para 1.409 linhas): o custo do sklearn é fixo por chamada. Sem teto, o lote é vetor de negação de serviço, porque o trabalho é síncrono |
+| 2026-08-17 | 9d | **`response_model` em todas as rotas** e **nenhum eco da entrada** | o campo não declarado não sai mesmo que o `return` o inclua (36 × 374 bytes). Correlação por `request_id` gerado no servidor, no corpo e no header |
+| 2026-08-17 | 9d | 🚨 **Handler de `RequestValidationError` removendo `input`/`ctx`** — `extra="forbid"` sozinho não basta | `forbid` **concentra** o vazamento: o erro devolve `loc` E `input` (`CustomerID: 3668-QPYBK`). O mesmo handler cobre o 500, cujo `str(e)` do sklearn cita o dado do cliente. Verificado nos 8 payloads inválidos: nenhum devolve valor do payload |
+| 2026-08-17 | 9d | **`/health` declara identidade** (versão, sha256, nº de features, limiar) e o processo **morre no boot** sem artefato válido | um 200 que não diz o que está carregado é o oitavo servidor da Knight Capital. Verificado reprovando: artefato apagado ⇒ uvicorn não sobe, com mensagem acionável — em vez de responder `healthy` e falhar no `/predict` |
+| 2026-08-17 | 9d | **`pd.DataFrame` com `by_alias=True` + `predict_proba` + limiar do artefato** | seleção por nome, não por posição (teste embaralha as chaves do JSON); e `.predict()` custaria R$ 7.546/ciclo e 83 churners. A resposta leva probabilidade, decisão e o limiar aplicado |
+| 2026-08-17 | 9d | 🚨 **Achado: lote e unitário não são bit-idênticos** — 495 de 1.409 linhas (35%) diferem em até 2,2e-16 | é o BLAS mudando o caminho de vetorização com o nº de linhas. **Zero** decisões mudam no limiar 0,29, mas nada rio abaixo pode comparar predições por igualdade exata (cache por hash, deduplicação, reconciliação do log da Etapa 10) |
+| 2026-08-17 | 9d | **Escopo declarado:** sem autenticação, `/docs` aberta, sem padrões GoF, sem log JSONL | limitação declarada vale mais que omissão; `/docs` publica a descrição do modelo, não dado pessoal; padrão que não paga é patternitis; o log é Etapa 10, e o `request_id` já é o gancho |

@@ -19,33 +19,11 @@ import textwrap
 import numpy as np
 import pytest
 
-from src import artefato, config, data, gate
+from src import artefato, config
 
-
-@pytest.fixture(scope="module")
-def dados() -> data.Dados:
-    return data.dividir()
-
-
-@pytest.fixture(scope="module")
-def promovido(dados, tmp_path_factory):
-    """Treina o campeão e o serializa num arquivo temporário.
-
-    Escopo de módulo porque o `fit` custa ~13 ms e a partição ~0,6 s: o caro
-    aqui é ler o Excel, não treinar.
-    """
-    pipe = gate.treinar_campeao(dados)
-    _, custo = gate.medir(dados, pipe=pipe)
-    caminho = tmp_path_factory.mktemp("modelo") / "campeao.joblib"
-    metadados = {
-        "versao_modelo": config.VERSAO_MODELO,
-        "modelo": config.GATE_MODELO_REFERENCIA,
-        "features": list(pipe.feature_names_in_),
-        "limiar_operacao": float(custo["limiar_otimo"]),
-        "dataset_sha256": dados.sha256,
-    }
-    artefato.salvar(pipe, metadados, caminho=caminho)
-    return pipe, caminho
+# As fixtures `dados`, `promovido` e `art` vivem em `tests/conftest.py`: elas são
+# compartilhadas com os testes da API, e duplicá-las faria a suíte ler o Excel
+# duas vezes para produzir o mesmo objeto.
 
 
 def test_round_trip_e_bit_a_bit(dados, promovido):

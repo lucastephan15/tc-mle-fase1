@@ -42,7 +42,9 @@ src/            código modularizado — o que o CI importa e testa
   preprocess.py   limpeza + feature engineering
   train.py        treino, executável e parametrizável
   evaluate.py     métricas + auditoria de fairness
-  api/            FastAPI (/predict, /health)
+  artefato.py     empacotar/carregar o modelo servido — e VERIFICAR que é ele
+  promover.py     grava models/campeao.joblib, só se passar no gate
+  api/            FastAPI — schema (contrato) · servico (pontuar) · app (HTTP)
 data/raw/       ⛔ IMUTÁVEL — nenhum script escreve aqui
 data/processed/ tudo que é derivado (não versionado: reprodutível)
 models/         artefatos serializados (o Registry é a fonte de verdade)
@@ -71,11 +73,38 @@ GitHub Actions · Docker
 
 ```bash
 make setup      # venv + versões travadas
-make ci         # lint + 61 testes + gate de promoção — o mesmo que o CI roda
+make ci         # lint + 81 testes + gate de promoção — o mesmo que o CI roda
 make promover   # grava models/campeao.joblib — só se passar no gate
 make artefato   # mostra o que está promovido (versão, sha256, features, limiar)
+make api        # sobe a API em http://localhost:8000 (docs em /docs)
 make help       # todos os alvos
 ```
+
+### A API
+
+```bash
+make promover && make api
+
+curl localhost:8000/health
+curl -X POST localhost:8000/v1/predict -H 'Content-Type: application/json' -d '{
+  "Total Charges": 108.15, "Tenure Months": 2.0, "Monthly Charges": 53.85,
+  "Gender": "Male", "Senior Citizen": "No", "Partner": "No", "Dependents": "No",
+  "Multiple Lines": "No", "Internet Service": "DSL", "Online Security": "Yes",
+  "Tech Support": "No", "Contract": "Month-to-month", "Paperless Billing": "Yes"}'
+# -> {"request_id":"…","versao_modelo":"1.0.0",
+#     "predicoes":[{"probabilidade":0.3700,"decisao":true,"limiar":0.29}]}
+```
+
+`POST /v1/predict-batch` (`{"clientes": [...]}`, até 5.000) é o endpoint **principal**: 1.409
+clientes custam 2,9 ms em lote contra 2.353 ms em chamadas unitárias. A resposta traz
+**probabilidade**, não classe — o limiar de operação é parâmetro de negócio, vem do artefato e
+acompanha cada predição.
+
+O contrato de entrada é **derivado do artefato** (13 features, 25 valores categóricos, 3 faixas):
+categoria inexistente, `-999` e `1e9` recebem **422**, não 200 com predição corrompida.
+
+⚠️ **Limitações declaradas:** não há autenticação (API interna), e `/docs` publica o contrato —
+que é a descrição do modelo, não dado pessoal.
 
 ⚠️ **`models/` não é versionado** (o `.gitignore` diz por quê: o registry é a fonte de verdade,
 não o repositório). Depois de clonar, `make promover` reconstrói o artefato — e ele só é gravado
@@ -88,7 +117,7 @@ Prova real de reprodutibilidade: clonar numa máquina limpa e obter **o número 
 
 | Job | Faz | Falha quando |
 |---|---|---|
-| **QA** | `ruff check` + `pytest` (61 testes) | lint sujo ou qualquer teste vermelho |
+| **QA** | `ruff check` + `pytest` (81 testes) | lint sujo ou qualquer teste vermelho |
 | **Gate de promoção** | treina o modelo de referência e mede na **validação**, em **dois eixos** | PR-AUC < 0,66 **ou** Brier > 0,14 |
 
 Três decisões que valem a leitura, todas em `.github/workflows/ci.yml` e no decision log:
@@ -123,7 +152,7 @@ Três decisões que valem a leitura, todas em `.github/workflows/ci.yml` e no de
 | 6 · Comparação de algoritmos | ✅ concluída — §5b · **empate técnico** entre LogReg, HGB e RF (0,07 dp) |
 | 7 · Tuning | ✅ concluída — §5c · **ganho zero**: o default da LogReg já era o pico da grade |
 | 8 · MLP em PyTorch | ✅ concluída — §5d · **a rede não superou** (0,6615 × 0,6646), e a regra 1-SE elegeu profundidade **zero** |
-| 9 · Pipeline serializado + API | ⬜ |
+| 9 · Pipeline serializado + API | 🟡 **9c e 9d concluídas** — §5e · artefato promovido com identidade verificada na carga, e API FastAPI de pé (`/health` · `/v1/predict` · `/v1/predict-batch`). Falta a **9f** (container) |
 | 9.5 · CI/CD | 🟡 **parcial** — QA + gate de dois eixos rodando; falta o registro (depende da Etapa 9) |
 | 10 · Monitoramento | ⬜ |
 | 10.5 · Governança e fairness | ⬜ |

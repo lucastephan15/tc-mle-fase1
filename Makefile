@@ -4,7 +4,7 @@
 # repositório e reproduz seu melhor modelo com um comando?". Se a resposta mora
 # na cabeça de quem escreveu, a reprodutibilidade é declarativa, não real.
 
-.PHONY: help setup exige-venv lint test ci gate promover artefato eda baseline comparacao finalistas tuning mlp limpar
+.PHONY: help setup exige-venv lint test ci gate promover artefato api eda baseline comparacao finalistas tuning mlp limpar
 
 # Os alvos usam os binários DO VENV, não os do shell. Motivo medido em 11/08/2026:
 # `make ci` fora do venv ativado pegava o ruff GLOBAL do sistema (0.6.4) em vez do
@@ -47,6 +47,13 @@ promover: exige-venv  ## Etapa 9c — grava models/campeao.joblib (só se passar
 
 artefato: exige-venv  ## Mostra o que está promovido hoje (versão, sha256, features)
 	$(PY) -m src.artefato
+
+api: exige-venv  ## Sobe a API local em http://localhost:8000 (docs em /docs)
+	# Sem --reload: é servidor de desenvolvimento e recarregador de código, não
+	# um modo "verbose". Em produção quem define o nº de workers é a RAM
+	# (193,6 MB por worker, 93% import), não a vazão — a 1,7 ms por predição a
+	# vazão sobra desde o primeiro.
+	$(VENV)/bin/uvicorn src.api.app:app --host 127.0.0.1 --port 8000
 
 # --- Etapas do pipeline, na ordem em que foram executadas -------------------
 
