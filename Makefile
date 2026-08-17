@@ -4,7 +4,7 @@
 # repositório e reproduz seu melhor modelo com um comando?". Se a resposta mora
 # na cabeça de quem escreveu, a reprodutibilidade é declarativa, não real.
 
-.PHONY: help setup exige-venv lint test ci gate eda baseline comparacao finalistas tuning mlp limpar
+.PHONY: help setup exige-venv lint test ci gate promover artefato eda baseline comparacao finalistas tuning mlp limpar
 
 # Os alvos usam os binários DO VENV, não os do shell. Motivo medido em 11/08/2026:
 # `make ci` fora do venv ativado pegava o ruff GLOBAL do sistema (0.6.4) em vez do
@@ -41,6 +41,12 @@ gate: exige-venv  ## Treina o modelo de referência e falha se ficar abaixo do p
 	$(PY) -m src.gate
 
 ci: lint test gate  ## Tudo que o CI roda, na mesma ordem — rodar ANTES de dar push
+
+promover: exige-venv  ## Etapa 9c — grava models/campeao.joblib (só se passar no gate)
+	$(PY) -m src.promover
+
+artefato: exige-venv  ## Mostra o que está promovido hoje (versão, sha256, features)
+	$(PY) -m src.artefato
 
 # --- Etapas do pipeline, na ordem em que foram executadas -------------------
 

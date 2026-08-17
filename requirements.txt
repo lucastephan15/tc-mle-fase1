@@ -35,7 +35,9 @@ graphql-core==3.2.11
 graphql-relay==3.2.0
 gunicorn==26.0.0
 h11==0.16.0
+httpcore2==2.10.0
 httptools==0.8.0
+httpx2==2.10.0
 huey==3.3.4
 idna==3.18
 importlib_metadata==9.0.0
@@ -100,6 +102,7 @@ sympy==1.14.0
 threadpoolctl==3.6.0
 torch==2.13.0
 tqdm==4.70.0
+truststore==0.10.4
 typing-inspection==0.4.3
 typing_extensions==4.16.0
 tzdata==2026.3

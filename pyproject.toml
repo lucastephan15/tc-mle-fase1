@@ -81,4 +81,12 @@ addopts = "-q --strict-markers"
 # (ver decision log, Etapa 3). Aqui ele vira erro de teste.
 filterwarnings = [
     "error::sklearn.exceptions.ConvergenceWarning",
+    # Mesmo argumento, outro warning — e este é ainda mais silencioso. Carregar um
+    # artefato treinado com outra versão do sklearn NÃO interrompe nada
+    # (`InconsistentVersionWarning` é subclasse de `UserWarning`): o modelo prediz
+    # com número diferente, e o `__setstate__` ainda faz `state.pop("_sklearn_version")`,
+    # de modo que o objeto carregado nem sabe mais com que versão foi treinado. O
+    # requirements.in tem a razão do pin escrita em comentário desde a Etapa 3 e
+    # nenhum mecanismo que a aplicasse; esta linha é o mecanismo.
+    "error::sklearn.exceptions.InconsistentVersionWarning",
 ]

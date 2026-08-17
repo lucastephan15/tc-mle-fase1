@@ -1254,6 +1254,79 @@ A refutada é a mais útil das seis: ela é a única que produziu um experimento
 
 ---
 
+## 5e. Etapa 9 — pipeline serializado e API
+
+### 9c · A promoção do artefato (17/08/2026)
+
+Até esta data o repositório **não tinha um modelo promovido**: `models/` continha apenas
+`.gitkeep`, `grep joblib.dump src/` não retornava nada, e todas as medições das Etapas 6 a 8 — e
+das quatro aulas do Módulo 04 — foram feitas contra um pipeline **treinado na hora**. Isso é
+suficiente para comparar modelos e é insuficiente para servir um: um serviço que retreina no
+startup serve *um* modelo com o mesmo código, não *o* modelo que foi avaliado.
+
+**O que foi construído:** `src/artefato.py` (empacotar/carregar/verificar), `src/promover.py`
+(o executável, `make promover`), `tests/test_artefato.py` (5 testes) e o alvo `make artefato`
+de inspeção.
+
+**Artefato promovido:** `models/campeao.joblib` · sha256 `5f2b62dcd5ab7ef2…` · LogReg v1.0.0 ·
+13 features · limiar 0,29 · PR-AUC 0,6646 · Brier 0,1339 — os mesmos números que o gate mede e
+que o teste de caracterização (item 85) fixa.
+
+**As sete decisões, com o modo de falha que cada uma fecha:**
+
+| # | Decisão | Contra o quê |
+|---|---|---|
+| 1 | **`gate.treinar_campeao()` extraída**: promoção e gate treinam pelo mesmo caminho | duas definições do mesmo modelo mantidas iguais pela memória de quem edita. O gate **retreina** em vez de conferir o artefato ⇒ a divergência não quebraria nada: o CI aprovaria um modelo e a API serviria outro, os dois verdes |
+| 2 | **UM arquivo**: pipeline e metadados serializados juntos | modelo e metadados em arquivos separados, sem verificação de que combinam, produzem **rótulo errado com HTTP 200** — o modo de falha mais caro de uma API de ML, porque não falha |
+| 3 | **`dict` puro no disco, não uma dataclass nossa** | serializar uma classe de `src.artefato` obrigaria o ambiente de inferência a ter `src` importável — o mesmo acoplamento do `FunctionTransformer` (item 17), destruído por comodidade de tipagem. O campeão carrega sem `src` no `sys.path`, e há teste que impede que ele saia desse lado |
+| 4 | **Versão do sklearn gravada à mão e verificada na carga** (item 96) | `BaseEstimator.__setstate__` faz `state.pop("_sklearn_version")`: o objeto carregado não sabe mais com que versão foi treinado. E versão divergente **não impede a carga** — `InconsistentVersionWarning` é subclasse de `UserWarning`, o modelo prediz com número diferente (0,6601 × 0,6646 medidos) e ninguém lê o aviso |
+| 5 | **Falhar na CARGA** (`ArtefatoIncompativel`), não avisar no log | subir degradado é escolher a falha silenciosa: a API responderia 200 com a probabilidade de outro modelo. Falhar na inicialização troca um erro invisível de predição por um erro visível de deploy — é o servidor nº 8 da Knight Capital |
+| 6 | **Limiar de operação (0,29) viaja DENTRO do artefato** | um `0.29` literal na API é a segunda cópia que ninguém atualiza junto — e a que fica para trás não dá erro, só corta a fila no lugar errado. O limiar é propriedade do **modelo servido**: muda quando a distribuição de probabilidades muda |
+| 7 | **Features declaradas a partir de `pipe.feature_names_in_`**, não de `config.FEATURES` | o config acompanha o **código**, o artefato acompanha o **modelo servido**; os dois só coincidem enquanto ninguém promove um modelo treinado com outro config. É a fonte de verdade do contrato Pydantic da 9d (item 94) |
+
+**Nada é promovido sem passar no gate.** `promover.main()` aplica `gate.aprovado()` nos dois eixos
+antes de gravar; reprovado, **o artefato anterior continua servindo** e o processo sai com 1.
+Verificado reprovando (piso forçado a 0,99): nada gravado e o arquivo anterior **idêntico byte a
+byte**. Promoção que grava mesmo reprovada não é promoção, é sobrescrita.
+
+**Round-trip verificado no ato da promoção**, além de no teste: grava, recarrega, compara as 1.409
+probabilidades da validação com `np.array_equal` — **idênticas**, não "próximas". Serialização não
+é aproximação numérica; diferença na décima casa significaria objeto reconstruído em vez de
+restaurado.
+
+**Os 5 testes novos, e o que cada um pega** (a suíte anterior tinha 56 e **nenhum tocava o objeto
+serializado** — ela exercitava o pipeline em memória, que é justamente o que a API não usa):
+round-trip bit a bit · metadados ⇄ pipeline não podem divergir · versão de sklearn forjada é
+**barrada** · formato desconhecido é barrado · **carga num subprocesso sem a raiz do repo no
+`sys.path`** (o ambiente do container: dos 9 artefatos do `mlruns/`, 8 carregam e 1 não — o
+`logreg+feat`, por causa do `FunctionTransformer`).
+
+**Item 96(a) aplicado:** `InconsistentVersionWarning` entrou no `filterwarnings` do
+`pyproject.toml`, ao lado do `ConvergenceWarning` que já estava lá pelo argumento idêntico e
+escrito — *"um warning que ninguém lê é um warning que não existe"*. O `requirements.in` tinha a
+razão do pin em comentário desde a Etapa 3 e nenhum mecanismo que a aplicasse; agora tem.
+
+**Duas limitações declaradas:**
+- **O artefato não é versionado no Git** (`models/*` no `.gitignore`, decisão da Etapa 9.5: *o
+  registry é a fonte de verdade, não o repositório*). Consequência a resolver na 9f: a imagem
+  precisa do artefato, e ele não vem do clone — ou o build roda `make promover` (e aí o dado bruto
+  LGPD entraria na imagem, o que a M03-A04 proíbe), ou o artefato é injetado como camada/volume.
+  **É decisão da 9f, e está registrada aqui como pendência, não como esquecimento.**
+- **Promover duas vezes gera sha256 diferentes**, porque `promovido_em` é um timestamp. O modelo é
+  bit-determinístico (três execuções dão o mesmo `repr` de PR-AUC); a identidade do **arquivo**,
+  não. É o comportamento certo para um carimbo de deploy — mas quem quiser comparar dois artefatos
+  compara as métricas e o commit, não o sha do arquivo.
+
+**Dependências:** `httpx2` e `joblib` declarados no `requirements.in` com o motivo. O `httpx2` era
+**bloqueio** e não planejamento — sem ele `from fastapi.testclient import TestClient` levanta
+`RuntimeError` e nenhum teste de rota da 9d rodaria. ⚠️ Starlette 1.6 pede `httpx2`, não `httpx`:
+o segundo ainda funciona emitindo `DeprecationWarning` a cada import. O `joblib` chegava de carona
+como transitiva do scikit-learn e agora é importado **diretamente** por `src/artefato.py` — se um
+sklearn futuro trocar de serializador, o lock sairia sem joblib e nenhum artefato do histórico
+carregaria.
+
+---
+
 ## 6. Decisão do modelo final
 
 *(preenchida ao fim da Etapa 8 — a fase de modelagem está fechada; o teste segue intocado até a
@@ -1407,3 +1480,16 @@ Etapa 11.)*
 | 2026-08-11 | 8 | 🚨 **PR-AUC e custo em reais apontaram para lados opostos** — decidido pela hierarquia da Etapa 0 | a rede custa R$ 479 a menos por ciclo (maior que a dispersão entre suas seeds, R$ 203) e perde na métrica de seleção declarada. Trocar de régua depois de ver o resultado é o pecado que a 1-SE existe para evitar; o número foi ao backlog, não ao lixo |
 | 2026-08-11 | 8 | **Gate do CI ganhou o segundo eixo: `Brier ≤ 0,14`** (item 41), verificado reprovando | gate de um eixo aprova modelo que ordena igual e calibra pior — e a fila é ordenada por `P(churn) × CLTV`, então a probabilidade é multiplicada por reais. Entrou antes de ser necessário, que é quando é barato |
 | 2026-08-11 | 8 | **Item 16 fechado: as 4 features da Etapa 4 seguem sem efeito no MLP** (+0,0006) | terceira família de modelos a rejeitá-las. "A rede aprende interação sozinha" corta nos dois sentidos: se valesse algo, ela a acharia sem a feature pronta |
+| 2026-08-17 | 9c | **Artefato promovido existe**: `models/campeao.joblib`, LogReg v1.0.0, sha256 `5f2b62dc…` | até hoje todas as medições rodavam contra um pipeline treinado na hora. Comparar modelos assim é legítimo; **servir** não é — o serviço tem de servir *o* modelo avaliado, não um irmão treinado com o mesmo código |
+| 2026-08-17 | 9c | `gate.treinar_campeao()` extraída: **promoção e gate treinam pelo mesmo caminho** | duas definições do mesmo modelo divergem em silêncio, e o gate **retreina** em vez de conferir o artefato ⇒ o CI aprovaria um modelo enquanto a API serve outro, os dois verdes |
+| 2026-08-17 | 9c | **Um único arquivo** com pipeline + metadados dentro | modelo e metadados separados, sem verificação de que combinam, produzem rótulo errado com HTTP 200 — o modo de falha mais caro numa API de ML, porque não falha |
+| 2026-08-17 | 9c | Serializado como **`dict` puro**, nunca uma dataclass de `src.artefato` | serializar classe nossa obrigaria o ambiente de inferência a ter `src` importável — recriaria o acoplamento do item 17 por comodidade de tipagem. Há teste que carrega o artefato **sem o repo no `sys.path`** |
+| 2026-08-17 | 9c | 🚨 **Versão do sklearn gravada à mão e verificada na CARGA** (item 96b) | `__setstate__` faz `state.pop("_sklearn_version")` e o `InconsistentVersionWarning` é `UserWarning`: o modelo carrega, prediz **0,6601 em vez de 0,6646** e o carimbo some. Se não for escrito ao promover, não existe depois |
+| 2026-08-17 | 9c | **Falhar na carga** (`ArtefatoIncompativel`), não avisar no log | subir degradado é escolher a falha silenciosa — 200 OK com a probabilidade de outro modelo. É o servidor nº 8 da Knight Capital em versão doméstica |
+| 2026-08-17 | 9c | **Limiar de operação 0,29 viaja dentro do artefato**, nunca literal na API | o corte é propriedade do modelo servido e muda com ele; a segunda cópia não daria erro, só cortaria a fila no lugar errado. Fecha o 9h antes de a API existir |
+| 2026-08-17 | 9c | Contrato de colunas declarado a partir de **`pipe.feature_names_in_`**, não de `config.FEATURES` | o config acompanha o código, o artefato acompanha o modelo servido. É a fonte de verdade do schema Pydantic da 9d (item 94) |
+| 2026-08-17 | 9c | **Nada é promovido sem passar no gate**, verificado reprovando (piso forçado a 0,99) | nada gravado e o artefato anterior **idêntico byte a byte**. Promoção que grava mesmo reprovada não é promoção, é sobrescrita |
+| 2026-08-17 | 9c | **Round-trip bit a bit** conferido no ato da promoção *e* em teste (`np.array_equal`, não `approx`) | serialização não é aproximação numérica: diferença na décima casa significaria objeto reconstruído em vez de restaurado. A suíte tinha 56 testes e **nenhum tocava o objeto serializado** |
+| 2026-08-17 | 9c | **Item 96(a) aplicado**: `InconsistentVersionWarning` como erro no `filterwarnings` | o `requirements.in` tinha a razão do pin escrita em comentário desde a Etapa 3 e nenhum mecanismo que a aplicasse. Uma linha, mesmo argumento do `ConvergenceWarning` |
+| 2026-08-17 | 9 | `httpx2` e `joblib` declarados no `requirements.in` | `httpx2` era **bloqueio**, não planejamento: sem ele o `TestClient` levanta `RuntimeError` e nenhum teste de rota roda (Starlette 1.6 pede `httpx2`, não `httpx`). `joblib` passou a ser import **direto** de `src/artefato.py` |
+| 2026-08-17 | 9c | ⚠️ **Pendência declarada para a 9f:** o artefato **não** é versionado no Git (`models/*` ignorado) | a imagem precisa dele e o clone não o traz. Ou o build promove (e o dado bruto LGPD entraria na imagem, o que a M03-A04 proíbe), ou o artefato é injetado como camada/volume. Decisão da 9f, registrada como pendência e não como esquecimento |

@@ -26,6 +26,16 @@ shap                  # explicabilidade — requisito do Art. 20 da LGPD, não e
 fastapi
 uvicorn[standard]
 pydantic
+joblib                # serialização do artefato promovido (Etapa 9c). Chega de carona
+                      # como transitiva do scikit-learn, mas `src/artefato.py` a importa
+                      # DIRETAMENTE: se um sklearn futuro trocar de serializador, o lock
+                      # sai sem joblib e nenhum artefato do histórico carrega. Dependência
+                      # que o código importa é dependência declarada.
+httpx2                # cliente HTTP do `fastapi.testclient.TestClient` — SEM ele,
+                      # `from fastapi.testclient import TestClient` levanta RuntimeError e
+                      # NENHUM teste de rota da Etapa 9 roda. Starlette 1.6 pede `httpx2`,
+                      # não `httpx`: o segundo ainda funciona, emitindo DeprecationWarning
+                      # a cada import (verificado em 17/08/2026).
 
 # visualização
 matplotlib

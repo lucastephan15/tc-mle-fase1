@@ -71,9 +71,15 @@ GitHub Actions · Docker
 
 ```bash
 make setup      # venv + versões travadas
-make ci         # lint + 54 testes + gate de promoção — o mesmo que o CI roda
+make ci         # lint + 61 testes + gate de promoção — o mesmo que o CI roda
+make promover   # grava models/campeao.joblib — só se passar no gate
+make artefato   # mostra o que está promovido (versão, sha256, features, limiar)
 make help       # todos os alvos
 ```
+
+⚠️ **`models/` não é versionado** (o `.gitignore` diz por quê: o registry é a fonte de verdade,
+não o repositório). Depois de clonar, `make promover` reconstrói o artefato — e ele só é gravado
+se o gate aprovar nos dois eixos.
 
 Versões pinadas + seeds fixados (`random_state`, `np.random.seed`, `torch.manual_seed`).
 Prova real de reprodutibilidade: clonar numa máquina limpa e obter **o número exato**.
@@ -82,7 +88,7 @@ Prova real de reprodutibilidade: clonar numa máquina limpa e obter **o número 
 
 | Job | Faz | Falha quando |
 |---|---|---|
-| **QA** | `ruff check` + `pytest` (54 testes) | lint sujo ou qualquer teste vermelho |
+| **QA** | `ruff check` + `pytest` (61 testes) | lint sujo ou qualquer teste vermelho |
 | **Gate de promoção** | treina o modelo de referência e mede na **validação**, em **dois eixos** | PR-AUC < 0,66 **ou** Brier > 0,14 |
 
 Três decisões que valem a leitura, todas em `.github/workflows/ci.yml` e no decision log:

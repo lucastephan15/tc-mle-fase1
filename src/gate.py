@@ -24,6 +24,7 @@ from __future__ import annotations
 import sys
 
 import numpy as np
+from sklearn.pipeline import Pipeline
 
 from src import config, data, evaluate
 from src.preprocess import construir_pipeline
@@ -47,17 +48,35 @@ def aprovado(pr_auc: float, brier: float) -> tuple[bool, str]:
     return True, ""
 
 
-def medir(dados: data.Dados) -> tuple[dict, dict]:
-    """Treina o modelo de referência e devolve (métricas, curva de custo).
+def treinar_campeao(dados: data.Dados) -> Pipeline:
+    """Constrói e ajusta o campeão. É AQUI que "o campeão" é definido.
 
-    Isolada de `main()` pelo mesmo motivo que `aprovado()`: para poder ser
-    chamada por um teste. É este o caminho ÚNICO que define "o campeão" — o
-    gate do CI e o teste de caracterização medem exatamente o mesmo objeto,
-    e não duas reconstruções mantidas iguais pela memória de quem edita.
+    Extraída de `medir()` na Etapa 9 para que a promoção do artefato
+    (`src/promover.py`) sirva **o mesmo objeto** que o gate do CI mede e que o
+    teste de caracterização caracteriza — e não uma terceira reconstrução
+    mantida igual pela memória de quem edita. Sem isso existiriam duas
+    definições do mesmo modelo, e a divergência entre elas não quebraria nada:
+    o CI aprovaria um modelo e a API serviria outro, os dois verdes.
     """
     modelo, escalonar = construir_modelo(config.GATE_MODELO_REFERENCIA, None)
     pipe = construir_pipeline(modelo, escalonar=escalonar)
     pipe.fit(dados.treino.X, dados.treino.y)
+    return pipe
+
+
+def medir(dados: data.Dados, pipe: Pipeline | None = None) -> tuple[dict, dict]:
+    """Treina o modelo de referência e devolve (métricas, curva de custo).
+
+    Isolada de `main()` pelo mesmo motivo que `aprovado()`: para poder ser
+    chamada por um teste.
+
+    `pipe` recebido de fora é o caso da promoção: mede-se o objeto que vai
+    para o disco, não um irmão treinado de novo com o mesmo código. Omitido,
+    treina — que é o caso do CI, onde o ponto é justamente provar que o
+    pipeline inteiro roda de ponta a ponta a partir do bruto.
+    """
+    if pipe is None:
+        pipe = treinar_campeao(dados)
     p = pipe.predict_proba(dados.validacao.X)[:, 1]
     # O limiar tem de ser o DE OPERAÇÃO (derivado do custo 3:1), não o 0,5 que a
     # função usa como referência: reportar custo a 0,5 daria um número que não

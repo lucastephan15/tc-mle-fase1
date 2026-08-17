@@ -12,6 +12,21 @@ RAW = RAIZ / "data" / "raw" / "Telco_customer_churn.xlsx"
 PROCESSED = RAIZ / "data" / "processed"
 MODELS = RAIZ / "models"
 
+# --- Artefato promovido (Etapa 9c) -----------------------------------------
+
+# UM arquivo, com pipeline e metadados dentro. Dois arquivos ("modelo.joblib" +
+# "metadados.json") sem verificação de que combinam produzem rótulo errado com
+# HTTP 200 — o modo de falha mais caro de uma API de ML, porque não falha.
+ARTEFATO = MODELS / "campeao.joblib"
+
+# Versão DO MODELO servido, não do código. Sobe quando o artefato promovido
+# passa a ser outro objeto (novo campeão, novo conjunto de features, novo
+# limiar); não sobe por refatoração que não muda a predição. É o que a API
+# devolve em /health e em cada resposta de /predict: sem isso, o log de
+# inferência da Etapa 10 não sabe qual modelo produziu cada linha, e a análise
+# de drift fica sem denominador.
+VERSAO_MODELO = "1.0.0"
+
 # Seed única para todo o projeto. Sem isso, comparar dois runs é ilusão —
 # a diferença pode ser só a partição que mudou.
 SEED = 42
