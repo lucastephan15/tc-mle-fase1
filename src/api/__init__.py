@@ -19,5 +19,5 @@ padrão é o conteúdo da aula sobre padrões, não uma esquiva dele.
 
 Para servir:
 
-    uvicorn src.api.app:app --host 0.0.0.0 --port 8000
+    uvicorn src.api.app:criar_app --factory --host 0.0.0.0 --port 8000
 """

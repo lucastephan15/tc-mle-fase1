@@ -16,9 +16,14 @@ próprios mocks.
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+
 import pytest
 from fastapi.testclient import TestClient
 
+from src import config
 from src.api import app as app_mod
 from src.api import schema
 
@@ -284,6 +289,42 @@ def test_toda_numerica_tem_faixa_declarada(art):
     assert set(numericas) <= set(schema.FAIXAS), (
         f"sem faixa declarada: {set(numericas) - set(schema.FAIXAS)}"
     )
+
+
+def test_importar_a_api_nao_exige_o_artefato():
+    """Importar o módulo NÃO pode carregar nada do disco. Regressão real.
+
+    Erro cometido, empurrado e pego pelo CI em 17/08/2026: um `app = criar_app()`
+    no nível do módulo transformava a carga do artefato em **efeito colateral do
+    import**. `make ci` passava na máquina de quem escreveu (o artefato está lá) e
+    a suíte inteira falhava **na coleta** no runner limpo, onde `models/` está
+    vazio por decisão — 81 testes derrubados por uma linha.
+
+    🔑 A lição é sobre o instrumento, não sobre a linha: **este defeito só existe
+    onde o arquivo não existe**, então nenhuma execução local podia encontrá-lo.
+    É o "funciona na minha máquina" com a raiz correta — e o teste abaixo o traz
+    para dentro do alcance do desenvolvimento, simulando a máquina limpa com um
+    caminho de artefato que não existe.
+
+    A propriedade que a factory preserva: quem chama `criar_app()` carrega, e
+    falha alto se o artefato não estiver lá.
+    """
+    codigo = (
+        "import src.api.app as m\n"
+        "print('import ok')\n"
+        "try:\n"
+        "    m.criar_app()\n"
+        "except Exception as e:\n"
+        "    print(type(e).__name__)\n"
+    )
+    r = subprocess.run(
+        [sys.executable, "-c", codigo],
+        capture_output=True, text=True, cwd=config.RAIZ,
+        env={**os.environ, "TC_ARTEFATO": "/caminho/que/nao/existe.joblib"},
+    )
+    assert r.returncode == 0, r.stderr
+    assert "import ok" in r.stdout
+    assert "ArtefatoIncompativel" in r.stdout
 
 
 def test_openapi_publica_o_contrato(cliente_real):

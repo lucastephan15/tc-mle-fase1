@@ -1409,6 +1409,29 @@ nada rio abaixo pode comparar predições por igualdade exata (cache por hash, d
 reconciliação do log da Etapa 10 — todos por tolerância). O teste de caracterização do artefato
 não é afetado, porque pontua sempre o mesmo lote.
 
+#### 🚨 O erro que só a máquina limpa podia encontrar (cometido e corrigido em 17/08/2026)
+
+A primeira versão terminava com `app = criar_app()` no nível do módulo — o idioma que todo tutorial
+usa, e que o `uvicorn src.api.app:app` pede. Com ele, **carregar o artefato virou efeito colateral
+do `import`**: qualquer `import src.api.app` passou a exigir `models/campeao.joblib` no disco.
+
+`make ci` local passou (o artefato está aqui) e o CI falhou **na coleta**, no runner limpo, onde
+`models/` está vazio **por decisão nossa** — 81 testes derrubados por uma linha, com a mensagem
+de erro certa no lugar errado.
+
+🔑 **A lição não é sobre a linha, é sobre o instrumento: este defeito só existe onde o arquivo não
+existe.** Nenhuma execução local podia encontrá-lo, e é exatamente o "funciona na minha máquina"
+que o CI existe para pegar — desta vez com a raiz correta, porque a diferença entre as duas
+máquinas *é o objeto da etapa*.
+
+**Correção:** o módulo não exporta objeto de app; o uvicorn recebe a **factory**
+(`uvicorn src.api.app:criar_app --factory`), o que preserva a propriedade que importava — a carga
+acontece antes de a primeira conexão ser aceita, e o processo morre na inicialização se o artefato
+não bater. Junto vieram duas coisas que trazem o defeito para dentro do alcance do desenvolvimento:
+`config.ARTEFATO` passou a ser configurável por `TC_ARTEFATO` (que o container vai querer de
+qualquer forma, para artefato em volume), e **um teste roda `import src.api.app` num subprocesso
+com um caminho inexistente**, exigindo que o import passe e que `criar_app()` falhe.
+
 #### Escopo declarado (o que NÃO foi feito, e por quê)
 
 - **Sem autenticação** — limitação declarada na descrição da própria API e na documentação, não
@@ -1606,3 +1629,5 @@ Etapa 11.)*
 | 2026-08-17 | 9d | **`pd.DataFrame` com `by_alias=True` + `predict_proba` + limiar do artefato** | seleção por nome, não por posição (teste embaralha as chaves do JSON); e `.predict()` custaria R$ 7.546/ciclo e 83 churners. A resposta leva probabilidade, decisão e o limiar aplicado |
 | 2026-08-17 | 9d | 🚨 **Achado: lote e unitário não são bit-idênticos** — 495 de 1.409 linhas (35%) diferem em até 2,2e-16 | é o BLAS mudando o caminho de vetorização com o nº de linhas. **Zero** decisões mudam no limiar 0,29, mas nada rio abaixo pode comparar predições por igualdade exata (cache por hash, deduplicação, reconciliação do log da Etapa 10) |
 | 2026-08-17 | 9d | **Escopo declarado:** sem autenticação, `/docs` aberta, sem padrões GoF, sem log JSONL | limitação declarada vale mais que omissão; `/docs` publica a descrição do modelo, não dado pessoal; padrão que não paga é patternitis; o log é Etapa 10, e o `request_id` já é o gancho |
+| 2026-08-17 | 9d | 🚨 **Nenhum `app = criar_app()` de módulo: o uvicorn recebe a FACTORY** (`--factory`) | erro cometido e pego pelo CI: o objeto de módulo tornava a carga do artefato **efeito colateral do import**, e a suíte inteira falhava na coleta no runner limpo (`models/` vazio por decisão) enquanto `make ci` local passava. 🔑 *O defeito só existe onde o arquivo não existe* — nenhuma execução local podia encontrá-lo |
+| 2026-08-17 | 9d | `config.ARTEFATO` configurável por **`TC_ARTEFATO`**, com teste de import em subprocesso | traz o defeito acima para dentro do alcance do desenvolvimento (simula a máquina limpa) e é o que o container vai querer de qualquer forma, quando o artefato vier de um volume |

@@ -5,6 +5,7 @@ Existe para que a lista de colunas descartadas na Etapa 1 seja CÓDIGO, e não u
 comentário no decision log. Toda decisão da §1 do log tem uma linha aqui.
 """
 
+import os
 from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parents[1]
@@ -17,7 +18,11 @@ MODELS = RAIZ / "models"
 # UM arquivo, com pipeline e metadados dentro. Dois arquivos ("modelo.joblib" +
 # "metadados.json") sem verificação de que combinam produzem rótulo errado com
 # HTTP 200 — o modo de falha mais caro de uma API de ML, porque não falha.
-ARTEFATO = MODELS / "campeao.joblib"
+#
+# O caminho é configurável por variável de ambiente porque no container o
+# artefato pode vir de um volume ou de outra camada — e porque é isso que permite
+# testar, num processo limpo, que importar a API **não** exige o arquivo.
+ARTEFATO = Path(os.getenv("TC_ARTEFATO", str(MODELS / "campeao.joblib")))
 
 # Versão DO MODELO servido, não do código. Sobe quando o artefato promovido
 # passa a ser outro objeto (novo campeão, novo conjunto de features, novo

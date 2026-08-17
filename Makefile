@@ -53,7 +53,7 @@ api: exige-venv  ## Sobe a API local em http://localhost:8000 (docs em /docs)
 	# um modo "verbose". Em produção quem define o nº de workers é a RAM
 	# (193,6 MB por worker, 93% import), não a vazão — a 1,7 ms por predição a
 	# vazão sobra desde o primeiro.
-	$(VENV)/bin/uvicorn src.api.app:app --host 127.0.0.1 --port 8000
+	$(VENV)/bin/uvicorn src.api.app:criar_app --factory --host 127.0.0.1 --port 8000
 
 # --- Etapas do pipeline, na ordem em que foram executadas -------------------
 

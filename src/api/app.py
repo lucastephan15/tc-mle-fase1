@@ -209,10 +209,21 @@ def _responder(request: Request, p: servico.Pontuador, clientes: list):
     )
 
 
-# O objeto que o uvicorn serve: `uvicorn src.api.app:app`.
+# 🚨 NÃO existe um `app = criar_app()` aqui, e a ausência é a correção de um erro
+# real — cometido, empurrado e pego pelo CI em 17/08/2026.
 #
-# Construído no import, o que faz a carga do artefato acontecer antes de o
-# servidor aceitar a primeira conexão — e faz o processo MORRER na inicialização
-# se o artefato não bater com o ambiente, em vez de subir degradado e responder
-# 200 com a probabilidade de outro modelo.
-app = criar_app()
+# Com o objeto de módulo, a carga do artefato virava efeito colateral do
+# **import**: qualquer `import src.api.app` passava a exigir `models/campeao.joblib`
+# no disco. `make ci` passava na máquina de quem escreveu (o artefato está lá) e a
+# suíte inteira falhava **na coleta** no runner limpo, onde `models/` está vazio por
+# decisão — 81 testes derrubados por um efeito colateral de import.
+#
+# É o acoplamento do 9d-quater na forma mais literal (lógica que só existe se o
+# recurso externo existir), e o único lugar onde ele aparece é a máquina limpa.
+#
+# O uvicorn recebe a factory e a chama ele mesmo, o que preserva a propriedade que
+# importava: a carga acontece **antes de a primeira conexão ser aceita**, e o
+# processo MORRE na inicialização se o artefato não bater — em vez de subir
+# degradado e responder 200 com a probabilidade de outro modelo.
+#
+#     uvicorn src.api.app:criar_app --factory --host 0.0.0.0 --port 8000
