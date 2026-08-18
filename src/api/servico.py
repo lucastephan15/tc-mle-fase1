@@ -28,6 +28,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
+import numpy as np
 import pandas as pd
 
 from src import artefato as art_mod
@@ -56,7 +57,10 @@ class Pontuador(Protocol):
     def sha256(self) -> str: ...
 
     @property
-    def versoes(self) -> dict[str, str]: ...
+    def versoes_treino(self) -> dict[str, str]: ...
+
+    @property
+    def versoes_runtime(self) -> dict[str, str]: ...
 
     def pontuar(self, linhas: list[dict]) -> list[float]: ...
 
@@ -86,8 +90,33 @@ class PontuadorArtefato:
         return self._a.sha256
 
     @property
-    def versoes(self) -> dict[str, str]:
+    def versoes_treino(self) -> dict[str, str]:
+        """O ambiente que TREINOU o modelo — carimbo gravado na promoção."""
         return dict(self._a.metadados.get("versoes", {}))
+
+    @property
+    def versoes_runtime(self) -> dict[str, str]:
+        """O ambiente que está SERVINDO agora — medido, não lido do artefato.
+
+        🚨 Separado do anterior por um defeito que só a imagem revelou. O
+        `/health` declarava um único campo `versoes`, alimentado pelos metadados
+        do artefato, e qualquer leitor entende um campo de prontidão como "o que
+        este serviço tem". Medido no container em 18/08/2026: o campo dizia
+        **Python 3.12.5** (a máquina que treinou) enquanto o processo rodava
+        **3.12.14** (a imagem `python:3.12-slim`). Nada estava errado no
+        artefato; o *rótulo* é que respondia a outra pergunta.
+
+        É a família de erro do repo inteiro — uma afirmação sobre um sistema que
+        ninguém confronta com o sistema — e no `/health` ela é a pior variante,
+        porque este endpoint existe justamente para declarar identidade. Um campo
+        ambíguo é pior que um campo ausente: parece resposta.
+
+        ⚠️ A checagem de `artefato.carregar()` compara **só o scikit-learn**
+        (onde a serialização mora, e ali diverge = processo morre no boot). As
+        demais linhas divergirem é normal e não impede nada — o que não pode é
+        ficar invisível.
+        """
+        return art_mod.versoes_do_ambiente()
 
     def pontuar(self, linhas: list[dict]) -> list[float]:
         """Um DataFrame, uma chamada, uma coluna de probabilidades.
@@ -95,8 +124,20 @@ class PontuadorArtefato:
         UMA chamada para o lote inteiro, não uma por linha: o custo do sklearn é
         quase todo fixo por chamada (~1,67 ms contra 2,0 µs por linha marginal),
         então iterar aqui devolveria as 825× ao consumidor.
+
+        🚨 **`None` vira `NaN` antes do DataFrame, e a troca não é cosmética.**
+        O schema aceita `null` onde o vazio é medição verdadeira (`Total
+        Charges` de quem não teve ciclo de faturamento). Medido contra o campeão:
+        com `np.nan` o pipeline imputa e devolve **0,2449336585**; com `None`
+        puro a coluna vira `dtype=object`, o imputador não a reconhece como
+        ausente e o `LogisticRegression` levanta **`ValueError: Input X contains
+        NaN`** — ou seja, aceitar `null` no schema **sem** esta linha trocaria um
+        422 honesto por um **500**. As duas peças são uma correção só.
         """
-        X = pd.DataFrame(linhas)
+        X = pd.DataFrame(
+            [{k: (np.nan if v is None else v) for k, v in linha.items()}
+             for linha in linhas]
+        )
         return [float(p) for p in self._a.pipeline.predict_proba(X)[:, 1]]
 
     def pronto(self) -> bool:

@@ -4,7 +4,9 @@
 # repositório e reproduz seu melhor modelo com um comando?". Se a resposta mora
 # na cabeça de quem escreveu, a reprodutibilidade é declarativa, não real.
 
-.PHONY: help setup exige-venv lint test ci gate promover artefato api eda baseline comparacao finalistas tuning mlp limpar
+.PHONY: help setup exige-venv lint test ci gate promover artefato api \
+        docker-build docker-run docker-teste docker-limpar \
+        eda baseline comparacao finalistas tuning mlp limpar
 
 # Os alvos usam os binários DO VENV, não os do shell. Motivo medido em 11/08/2026:
 # `make ci` fora do venv ativado pegava o ruff GLOBAL do sistema (0.6.4) em vez do
@@ -54,6 +56,52 @@ api: exige-venv  ## Sobe a API local em http://localhost:8000 (docs em /docs)
 	# (193,6 MB por worker, 93% import), não a vazão — a 1,7 ms por predição a
 	# vazão sobra desde o primeiro.
 	$(VENV)/bin/uvicorn src.api.app:criar_app --factory --host 127.0.0.1 --port 8000
+
+# --- Container (Etapa 9f) ---------------------------------------------------
+
+# A tag da imagem acompanha a VERSÃO DO MODELO servido, não a do código: é o
+# artefato dentro dela que define o que ela faz.
+IMAGEM   ?= tc-churn
+TAG      ?= 1.0.0
+PLATAFORMA ?= linux/amd64
+PORTA    ?= 8010
+
+docker-build: ## Etapa 9f — constrói a imagem de serviço (amd64 por padrão)
+	# 🚨 `--platform` explícito. Um contêiner Linux no macOS roda numa VM arm64,
+	# então o build aqui produz arm64 por padrão — e o runner do Actions e a
+	# maioria das clouds são x86_64: `exec format error`, e o erro aparece no
+	# DEPLOY, não no build local que passou. Sobrescreva com PLATAFORMA=linux/arm64
+	# para um build nativo (mais rápido) quando o alvo for só a máquina local.
+	docker buildx build --platform $(PLATAFORMA) -t $(IMAGEM):$(TAG) --load .
+
+docker-run: ## Sobe a imagem em http://localhost:$(PORTA) (docs em /docs)
+	docker run --rm --name $(IMAGEM) --platform $(PLATAFORMA) \
+		-p $(PORTA):8000 $(IMAGEM):$(TAG)
+
+docker-teste: exige-venv ## Etapa 9e — sobe o container e testa contra ele
+	# A metade que a suíte do pytest NÃO cobre: ela exercita o pipeline em
+	# memória, e o que a API serve é o objeto SERIALIZADO dentro de uma imagem.
+	# Testar o que você treina não é testar o que você serve.
+	@docker rm -f $(IMAGEM)-teste >/dev/null 2>&1 || true
+	docker run -d --name $(IMAGEM)-teste --platform $(PLATAFORMA) \
+		-p $(PORTA):8000 $(IMAGEM):$(TAG)
+	@echo "esperando o healthcheck (PRONTIDÃO, não vitalidade)..."
+	@for i in $$(seq 1 60); do \
+		s=$$(docker inspect --format '{{.State.Health.Status}}' $(IMAGEM)-teste); \
+		[ "$$s" = "healthy" ] && break; \
+		[ "$$s" = "unhealthy" ] && { docker logs $(IMAGEM)-teste; exit 1; }; \
+		sleep 1; \
+	done; echo "healthy em $${i}s"
+	# `PYTHONPATH=.` porque `sys.path[0]` de um script é a pasta DELE (`scripts/`),
+	# não a raiz do repo — o `import src` falharia. É o item 17 numa terceira
+	# porta, e a correção definitiva é a 9g (tornar o projeto instalável), não
+	# mais uma variável de ambiente por chamador.
+	@TC_API_BASE=http://localhost:$(PORTA) PYTHONPATH=. $(PY) scripts/integracao_container.py; \
+		codigo=$$?; docker rm -f $(IMAGEM)-teste >/dev/null; exit $$codigo
+
+docker-limpar: ## Remove containers e imagens do projeto
+	-docker rm -f $(IMAGEM) $(IMAGEM)-teste 2>/dev/null
+	-docker rmi $(IMAGEM):$(TAG) 2>/dev/null
 
 # --- Etapas do pipeline, na ordem em que foram executadas -------------------
 

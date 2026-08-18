@@ -1451,6 +1451,185 @@ desenvolvimento, não SLA (medida honesta exige carga concorrente).
 
 ---
 
+### 9f · A imagem de serviço (18/08/2026)
+
+A API existia; o que faltava era ela existir **empacotada**. A imagem é o artefato que vai para
+qualquer destino — VM, Kubernetes ou PaaS — e é ela, não o Dockerfile, que é reprodutível por
+construção. 🔑 *O Dockerfile é a receita; a imagem é o artefato.* A receita só é repetível se
+fixar tudo o que resolve em tempo de build: **base por digest, lockfile com pins e plataforma
+explícita** — as três estão no arquivo, e a ausência de qualquer uma produziria imagens
+diferentes em meses diferentes com o mesmo `git checkout`.
+
+#### O `.dockerignore` veio antes do Dockerfile, e é uma allowlist
+
+🚨 **O Docker não lê o `.gitignore`.** O repositório já excluía `mlruns/`, `mlflow.db`,
+`data/processed`, `logs/*.jsonl`, `.env` e `*.pem` — **do Git**. Medido construindo de propósito
+uma imagem com `COPY . .` e sem exclusão nenhuma:
+
+| | com `.dockerignore` (allowlist) | sem, o `COPY . .` de tutorial |
+|---|---|---|
+| contexto transferido | **2,61 kB** | **1,5 GB** |
+| imagem resultante | 510 MB, funcional | **2,03 GB**, e sem Python instalado |
+| `data/raw/Telco_customer_churn.xlsx` | fora | **dentro** (1.368.250 bytes, 7.043 clientes reais) |
+| `.venv` | fora | **dentro** (1,5 GB de binários **arm64 de macOS** numa imagem Linux) |
+| `.git`, `mlruns/`, `mlflow.db` | fora | dentro (4,2 MB + 3,4 MB + 1,2 MB) |
+
+**Camada Docker é imutável:** um `RUN rm` posterior não apaga o arquivo da camada anterior — quem
+puxar a imagem tem o dado. A decisão precisa ser tomada **antes** do `COPY`, porque depois não
+existe "apagar", e isso transforma o assunto de peso em **exposição de dado pessoal por imagem**.
+
+🔑 **Por que allowlist e não lista de exclusões:** uma denylist protege contra o que já existe; a
+allowlist protege contra o que ainda vai existir. No dia em que alguém criar
+`data/exportacoes/clientes.csv`, a denylist deixa passar em silêncio — é assim que dado pessoal
+entra em imagem publicada — e a allowlist exige uma linha nova, escrita por quem teve de pensar
+no assunto.
+
+#### A imagem de serviço ≠ a imagem de experimentação
+
+Medido no `site-packages` com a mesma régua (`du`):
+
+| | tamanho |
+|---|---|
+| venv completo (experimentação) | **1.400 MB**, 118 distribuições |
+| imagem de serviço, filesystem inteiro | **510 MB** |
+| `site-packages` dentro da imagem | 394 MB, **30 distribuições** |
+| `torch` sozinho, no venv | **1.057 MB** — *o dobro da imagem de serviço inteira* |
+| o modelo servido | **8.306 bytes** |
+
+O campeão é uma regressão logística e **não importa `torch` em lugar nenhum**; ele está no repo
+porque a Etapa 8 é exigência da fase, e a Etapa 8 é treino. 🔑 É a distinção **código ≠
+dependência**: o perdedor continua versionado (reprodutibilidade e aprendizado organizacional) e
+mesmo assim fora do runtime. Dentro da imagem, `scipy` (111 MB) + `pandas` (77 MB) + `sklearn`
+(49 MB) + `numpy` (42 MB) são **~70%** do peso — *o que não cabe numa função serverless não é o
+modelo, é o que ele precisa para existir*.
+
+⚠️ O `requirements-serve.txt` é derivado do `requirements.txt` **com as mesmas versões**, não
+resolvido de forma independente: `src/artefato.py` compara a versão do scikit-learn gravada no
+artefato com a do ambiente e mata o processo na carga se divergirem. Derivar do lock existente
+faz a divergência ser **impossível** em vez de detectável.
+
+#### As decisões do Dockerfile que um tutorial não tem
+
+| decisão | motivo medido |
+|---|---|
+| `FROM python:3.12-slim@sha256:2c941e…` | tag é mutável, digest não. E **3.9 não constrói este projeto**: `scikit-learn 1.9.0` e `numpy 2.4.6` exigem `>=3.11` — falha alta que **só existe porque há pins**; sem eles o pip acharia versões antigas, a imagem subiria e o artefato quebraria na carga |
+| lockfile copiado **antes** do código | camada de dependências reaproveitada: alterar uma linha de `app.py` não reinstala scipy |
+| `COPY src/` + `COPY models/campeao.joblib` explícitos | `COPY . .` dependeria de o `.dockerignore` estar certo para não vazar dado pessoal; cópia explícita não depende de nada |
+| `USER appuser` (uid 999) | verificado dentro do container |
+| `HEALTHCHECK` que exige `status == "pronto"` | **verificado reprovando**, três cenários: serviço real → exit 0; porta morta → exit 1; **um servidor que responde 200 com `status: degradado` → exit 1**. Um healthcheck que só pergunta "responde?" aprova exatamente o cenário de falha que importa |
+| `criar_app --factory`, sem `--reload`, `--workers 1` | a factory impede que carregar o artefato vire efeito colateral do import (erro real de 17/08); o nº de workers sai da **RAM**, e o container mede **171,2 MiB** — 4 workers ≈ 685 MB, acima do teto de 512 MB de um plano gratuito |
+| `${PORT:-8000}` com `exec` | um PaaS reivindica a porta; o `exec` faz o uvicorn ser PID 1 e receber o `SIGTERM` do `docker stop` |
+
+🚨 **Plataforma.** Um contêiner Linux no macOS roda numa VM **arm64**: `docker build` no Apple
+Silicon produz imagem arm64, e o runner do Actions e a maioria das clouds são `x86_64` ⇒
+`exec format error`, **no deploy, não no build local que passou**. O `make docker-build` usa
+`--platform linux/amd64` por padrão. Verificado: a imagem amd64 reporta `linux/amd64`, sobe e
+responde `pronto` (emulada neste Mac, com `platform.machine() == "x86_64"` dentro dela).
+
+#### Etapa 9e — o teste de integração contra o container
+
+`make docker-teste` constrói, sobe, espera o healthcheck e roda `scripts/integracao_container.py`
+contra a imagem. **Ele encontrou um defeito na primeira execução**, e encontrou porque manda as
+**1.409 linhas reais da validação** em vez de um payload sintético (ver o achado abaixo).
+
+Resultados na imagem `linux/amd64` (emulada — as latências não são de produção):
+
+| verificação | resultado |
+|---|---|
+| identidade das predições | `max\|dif\| = 2,22e-16` (**4 ulps**), **40%** das linhas diferem, **0 decisões trocadas** no limiar 0,29, e **PR-AUC idêntico nos 10 dígitos** (0,6646020519 dos dois lados) |
+| unitário × lote | dif = 0,000e+00 na linha testada |
+| contrato de erro | categoria inédita · `-999` · campo extra · campo faltando ⇒ **422**, nenhum devolvendo valor do payload; vazio declarado ⇒ **200** |
+| latência (amd64 emulada) | unitário p50 6,82 / p95 9,54 ms · 8 concorrentes p50 44,4 ms · lote de 1.409 p50 26,3 ms |
+| latência (arm64 nativa) | unitário p50 4,37 / p95 13,30 ms · lote de 1.409 p50 15,6 ms |
+| `/health` sob carga | com **8 lotes de 1.409 em voo** (pior lote 279 ms), a probe respondeu p50 73,9 ms e máx 178,7 ms — folgado contra o timeout de 5 s. É o `def` × `async def` verificado no ambiente real |
+
+🔑 **A diferença numérica entre macOS e Linux é real e irrelevante — e as duas metades importam.**
+40% das linhas mudam no último bit porque o BLAS muda de caminho entre plataformas; **nenhuma**
+decisão de negócio muda, e a métrica reportada não se move na décima casa. Consequência de
+projeto, não de negócio: **nada rio abaixo pode comparar predições por igualdade exata** (cache
+por hash de resposta, deduplicação, reconciliação do log da Etapa 10).
+
+#### 🚨 Achado — o contrato ficou mais estreito que o pipeline que ele protege
+
+A linha 487 da validação foi **rejeitada com 422** pela própria API. Não é dado inválido: é um
+dos **11 clientes do Telco com `Total Charges` vazio, todos com `Tenure Months = 0`** — quem
+ainda não teve ciclo de faturamento. A Etapa 2 decidiu que esse vazio é *medição verdadeira* e o
+imputa com 0 (não com a mediana), e o pipeline sempre soube tratá-los: `predict_proba` com `NaN`
+devolve **0,2449336585**. Quem não sabia era o schema, porque todo campo numérico era `float`
+obrigatório com `ge`/`le` — e `NaN` não satisfaz `le`.
+
+**Consequência de negócio:** a API recusava exatamente a população que uma campanha de retenção
+mais quer pontuar — o cliente do primeiro mês.
+
+🔑 *É o erro simétrico do que o módulo de schema foi escrito para impedir.* Lá o risco era
+**aceitar lixo** (`-999`, categoria inexistente); aqui era **recusar dado legítimo**. Mesma raiz:
+contrato escrito à parte do objeto que ele descreve. A correção mantém a regra — quem decide é o
+artefato: o grupo `zero` do `ColumnTransformer` **é** a lista de colunas cujo vazio tem tratamento
+declarado, e o schema o lê de lá.
+
+⚠️ **Duas peças, e nenhuma serve sozinha.** Aceitar `null` no schema **sem** convertê-lo para
+`NaN` no serviço trocaria o 422 por um **500**: `pd.DataFrame` com `None` produz `dtype=object`,
+o imputador não reconhece a ausência e o `LogisticRegression` levanta `ValueError: Input X
+contains NaN`. Medido.
+
+⚠️ **E a assimetria é deliberada:** `Tenure Months: null` continua **422**, embora o grupo `num`
+também tenha imputador. Em `Total Charges` o vazio *significa* algo e o valor imputado **é** essa
+informação; em `Tenure Months` um vazio é dado faltando do integrador, e imputar a mediana do
+treino em silêncio transformaria uma falha de integração numa predição plausível — a sentinela de
+nulo entrando pela porta da frente. *O pipeline sabe imputar as duas; a API aceita o vazio só onde
+ele quer dizer algo.*
+
+📌 Nota para quem integra: `json.dumps(float("nan"))` do Python emite `NaN` literal, que **não é
+JSON válido**; o servidor responde 422 com `less_than_equal`, mensagem que aponta para o lugar
+errado. O contrato pede `null`.
+
+#### 🚨 Achado — o `/health` declarava o ambiente errado, e só o container mostrou
+
+O endpoint tinha um campo `versoes`, alimentado pelos metadados do artefato. Dentro da imagem ele
+dizia **Python 3.12.5** enquanto o processo rodava **3.12.14** (`python:3.12-slim`). Nada estava
+errado no artefato: o carimbo do treino estava correto. **O rótulo é que respondia a outra
+pergunta** — num endpoint de prontidão, cuja pergunta é *"o que este serviço tem?"*.
+
+É a família de erro que atravessa este repositório — *uma afirmação sobre um sistema que ninguém
+confronta com o sistema* — e no `/health` ela é a pior variante, porque este endpoint existe
+justamente para declarar identidade. **Um campo ambíguo é pior que um campo ausente: parece
+resposta.** Agora são dois campos, `versoes_treino` e `versoes_runtime`, e um teste exige que o
+**scikit-learn** coincida (é onde a serialização mora; divergir ali mata o processo no boot).
+
+#### O artefato passou a ser versionado — exceção nomeada, não revogação da regra
+
+`models/*` continua no `.gitignore` com o motivo escrito (*"o Registry é a fonte de verdade, não
+o Git"*), e a regra continua certa. O que mudou é o **destino**: a plataforma de deploy escolhida
+constrói a imagem a partir do **clone do Git** — sem máquina nossa no caminho e sem volume no
+plano gratuito. Ou o artefato está versionado, ou a imagem sobe sem modelo.
+
+É `!models/campeao.joblib` e **nunca** `!models/*`: nomear o arquivo é o que impede o próximo
+`.joblib` experimental de entrar de carona. São **8.306 bytes**, e o ganho colateral é que o
+artefato passa a ter sha256 rastreável pelo Git — que `src/artefato.py` já verifica na carga.
+🔑 *Exceção declarada com motivo é decisão; exceção silenciosa é a regra apodrecendo.*
+
+#### Escopo declarado
+
+- **O deploy em nuvem não foi feito nesta etapa** — a imagem está pronta e portátil, e escolher o
+  destino é a decisão seguinte. A portabilidade é o argumento: *a mesma imagem roda local, em VM,
+  em Kubernetes ou num PaaS* — trocar de destino não reescreve a aplicação.
+- **O CI não constrói a imagem.** O risco que isso deixa aberto (Dockerfile quebrado descoberto
+  tarde) é pequeno **porque a plataforma escolhida builda ela mesma e falha o deploy sem
+  publicar** — ela é, de fato, o CI da imagem. Acrescentar um job de build ao Actions custaria
+  ~2 min por push para antecipar um erro que já não chega a produção.
+- **O pacote não é instalável ainda** (`pip install .` é a 9g). Enquanto não for, `PYTHONPATH`
+  aparece em três lugares — no Dockerfile, no alvo `docker-teste` e em qualquer script fora da
+  raiz. É o item 17 pedindo a correção estrutural em vez de mais uma variável por chamador.
+- **Sem registry de imagem, sem multi-arch publicado, sem volume para o artefato.** A relação
+  artefato 8,3 KB × imagem 510 MB = **1 : 61.000** quantifica o acoplamento que resta: promover um
+  modelo novo republica 61 mil vezes mais bytes do que a mudança real. É limitação a declarar e
+  caminho de evolução, não obra a fazer agora.
+
+**5 testes novos** (87 na suíte) e o fluxo `make docker-build && make docker-teste` verde de ponta
+a ponta na imagem `linux/amd64`.
+
+---
+
 ## 6. Decisão do modelo final
 
 *(preenchida ao fim da Etapa 8 — a fase de modelagem está fechada; o teste segue intocado até a

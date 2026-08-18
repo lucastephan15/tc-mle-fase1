@@ -50,7 +50,10 @@ data/processed/ tudo que é derivado (não versionado: reprodutível)
 models/         artefatos serializados (o Registry é a fonte de verdade)
 notebooks/      exploração — e SÓ exploração
 tests/          unitários + integração
+scripts/        integracao_container.py — a Etapa 9e, contra a imagem de pé
 docs/           decision log, model card
+Dockerfile      a receita; a IMAGEM é que é o artefato reprodutível
+.dockerignore   allowlist — o Docker NÃO lê o .gitignore
 .github/workflows/  CI/CD
 ```
 
@@ -73,7 +76,7 @@ GitHub Actions · Docker
 
 ```bash
 make setup      # venv + versões travadas
-make ci         # lint + 81 testes + gate de promoção — o mesmo que o CI roda
+make ci         # lint + 87 testes + gate de promoção — o mesmo que o CI roda
 make promover   # grava models/campeao.joblib — só se passar no gate
 make artefato   # mostra o que está promovido (versão, sha256, features, limiar)
 make api        # sobe a API em http://localhost:8000 (docs em /docs)
@@ -107,17 +110,51 @@ categoria inexistente, `-999` e `1e9` recebem **422**, não 200 com predição c
 que é a descrição do modelo, não dado pessoal.
 
 ⚠️ **`models/` não é versionado** (o `.gitignore` diz por quê: o registry é a fonte de verdade,
-não o repositório). Depois de clonar, `make promover` reconstrói o artefato — e ele só é gravado
-se o gate aprovar nos dois eixos.
+não o repositório) — **com uma exceção nomeada**: `models/campeao.joblib`, o artefato promovido,
+8.306 bytes, porque a plataforma de deploy constrói a imagem a partir do clone. `make promover`
+o reconstrói a qualquer momento, e ele só é gravado se o gate aprovar nos dois eixos.
 
 Versões pinadas + seeds fixados (`random_state`, `np.random.seed`, `torch.manual_seed`).
 Prova real de reprodutibilidade: clonar numa máquina limpa e obter **o número exato**.
+
+### O container
+
+```bash
+make docker-build    # buildx --platform linux/amd64, base fixada por digest
+make docker-teste    # sobe a imagem e roda a Etapa 9e contra ela
+make docker-run      # sobe em http://localhost:8010
+```
+
+🚨 **`--platform linux/amd64` não é detalhe.** Um contêiner Linux no macOS roda numa VM **arm64**,
+então o build no Apple Silicon produz imagem arm64 — e o runner do Actions e a maioria das clouds
+são `x86_64`: `exec format error`, que aparece **no deploy**, não no build local que passou.
+
+**A imagem de serviço não é a de experimentação.** Medido: venv completo **1.400 MB** (118 dists)
+× imagem **510 MB** (30 dists) — `torch` sozinho são 1.057 MB e o campeão é uma **regressão
+logística que não o importa**. O modelo servido tem **8.306 bytes**; `scipy`, `pandas`, `sklearn`
+e `numpy` são ~70% da imagem. *O que não cabe numa função serverless não é o modelo, é o que ele
+precisa para existir.*
+
+**O `.dockerignore` é uma allowlist, e veio antes do Dockerfile.** O Docker **não lê o
+`.gitignore`**: um `COPY . .` levaria `data/raw` (7.043 clientes reais), `mlruns/`, `.git` e o
+`.venv` (1,5 GB de binários arm64 de macOS) para dentro da imagem — medido, **2,03 GB de contexto
+contra 2,61 kB**. E camada Docker é imutável: apagar depois não devolve o dado.
+
+O `HEALTHCHECK` verifica **prontidão**, não vitalidade — exige `status == "pronto"`, e foi
+verificado reprovando: um servidor que responde **200 com `status: degradado`** falha a probe.
+Sem artefato, o container **morre no boot** com mensagem acionável (exit 1), em vez de subir e
+responder 200 com o modelo de outra pessoa.
+
+⚠️ **`models/campeao.joblib` é a única exceção nomeada** ao `models/*` do `.gitignore` — 8.306
+bytes, porque a plataforma de deploy constrói a imagem a partir do clone do Git. A regra continua
+valendo para todo o resto; exceção declarada com motivo é decisão, exceção silenciosa é a regra
+apodrecendo.
 
 ### O que o CI faz
 
 | Job | Faz | Falha quando |
 |---|---|---|
-| **QA** | `ruff check` + `pytest` (81 testes) | lint sujo ou qualquer teste vermelho |
+| **QA** | `ruff check` + `pytest` (87 testes) | lint sujo ou qualquer teste vermelho |
 | **Gate de promoção** | treina o modelo de referência e mede na **validação**, em **dois eixos** | PR-AUC < 0,66 **ou** Brier > 0,14 |
 
 Três decisões que valem a leitura, todas em `.github/workflows/ci.yml` e no decision log:
@@ -152,7 +189,7 @@ Três decisões que valem a leitura, todas em `.github/workflows/ci.yml` e no de
 | 6 · Comparação de algoritmos | ✅ concluída — §5b · **empate técnico** entre LogReg, HGB e RF (0,07 dp) |
 | 7 · Tuning | ✅ concluída — §5c · **ganho zero**: o default da LogReg já era o pico da grade |
 | 8 · MLP em PyTorch | ✅ concluída — §5d · **a rede não superou** (0,6615 × 0,6646), e a regra 1-SE elegeu profundidade **zero** |
-| 9 · Pipeline serializado + API | 🟡 **9c e 9d concluídas** — §5e · artefato promovido com identidade verificada na carga, e API FastAPI de pé (`/health` · `/v1/predict` · `/v1/predict-batch`). Falta a **9f** (container) |
+| 9 · Pipeline serializado + API | 🟡 **9c, 9d, 9e e 9f concluídas** — §5e · artefato promovido com identidade verificada na carga, API FastAPI de pé (`/health` · `/v1/predict` · `/v1/predict-batch`) e **imagem `linux/amd64` servindo o mesmo modelo** (PR-AUC idêntico nos 10 dígitos entre macOS e Linux, 0 decisões trocadas). Falta o **deploy em nuvem** (bônus de +5%) |
 | 9.5 · CI/CD | 🟡 **parcial** — QA + gate de dois eixos rodando; falta o registro (depende da Etapa 9) |
 | 10 · Monitoramento | ⬜ |
 | 10.5 · Governança e fairness | ⬜ |

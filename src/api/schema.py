@@ -74,24 +74,53 @@ def identificador(coluna: str) -> str:
     return re.sub(r"[^0-9a-zA-Z]+", "_", coluna).strip("_").lower()
 
 
-def contrato_do_pipeline(pipeline: Pipeline) -> tuple[list[str], dict[str, list[str]]]:
-    """Extrai do artefato (a) os nomes das features na ordem e (b) as categorias.
+def contrato_do_pipeline(
+    pipeline: Pipeline,
+) -> tuple[list[str], dict[str, list[str]], list[str]]:
+    """Extrai do artefato (a) os nomes na ordem, (b) as categorias e (c) quem
+    aceita vazio.
 
     Lê o `ColumnTransformer` em vez de `config`: é o objeto que vai receber o
     DataFrame, e é a discordância entre ele e o schema que produziria **500 no
     ColumnTransformer** em vez de 422 na validação — erro no lugar errado, com
     dado real, em produção.
+
+    🚨 **O terceiro elemento existe por um defeito que só o container revelou.**
+    O grupo `zero` do pré-processamento são as colunas cujo vazio é *medição
+    verdadeira*: no Telco, `Total Charges` vem em branco para quem ainda não teve
+    ciclo de faturamento — **11 clientes, todos com `Tenure Months = 0`**. A
+    Etapa 2 decidiu tratá-los imputando 0 (e não a mediana), e o pipeline faz
+    isso corretamente. O schema, não: como todo campo numérico era `float`
+    obrigatório com `le`, esses clientes recebiam **422** — o cliente do primeiro
+    mês, que é exatamente a população que uma campanha de retenção mais quer
+    pontuar.
+
+    🔑 *O contrato ficou mais estreito que o pipeline que ele protege.* É o erro
+    simétrico do que este módulo foi escrito para impedir: lá o risco era aceitar
+    lixo, aqui é recusar dado legítimo — e os dois têm a mesma raiz, o contrato
+    escrito à parte do objeto que ele descreve. A correção mantém a regra: quem
+    decide é o artefato.
+
+    ⚠️ E o vazio é aceito **só** neste grupo, embora o grupo `num` também tenha
+    imputador (mediana). Não é inconsistência: no grupo `zero` o vazio *significa*
+    alguma coisa e o valor imputado é essa coisa; em `Tenure Months`, um vazio é
+    dado faltando do integrador, e imputar a mediana do treino em silêncio seria
+    transformar uma falha de integração em predição plausível. O pipeline sabe
+    imputar as duas; a API só aceita o vazio onde ele quer dizer algo.
     """
     features = list(pipeline.feature_names_in_)
     ct = pipeline.named_steps["preproc"]
     categorias: dict[str, list[str]] = {}
+    aceitam_vazio: list[str] = []
     for nome, _, colunas in ct.transformers_:
+        if nome == "zero":
+            aceitam_vazio.extend(colunas)
         if nome != "cat":
             continue
         ohe = ct.named_transformers_["cat"].named_steps["codificar"]
         for coluna, valores in zip(colunas, ohe.categories_, strict=True):
             categorias[coluna] = [str(v) for v in valores]
-    return features, categorias
+    return features, categorias, aceitam_vazio
 
 
 def construir_modelo_entrada(pipeline: Pipeline) -> type[BaseModel]:
@@ -109,7 +138,7 @@ def construir_modelo_entrada(pipeline: Pipeline) -> type[BaseModel]:
     Quem fecha é o handler de `RequestValidationError` em `app.py`, que remove
     `input` e `ctx`. As duas peças, não uma.
     """
-    features, categorias = contrato_do_pipeline(pipeline)
+    features, categorias, aceitam_vazio = contrato_do_pipeline(pipeline)
 
     campos: dict[str, Any] = {}
     for coluna in features:
@@ -122,11 +151,24 @@ def construir_modelo_entrada(pipeline: Pipeline) -> type[BaseModel]:
             ]
         else:
             lo, hi = FAIXAS[coluna]
-            tipo = Annotated[
-                float,
-                Field(alias=coluna, ge=lo, le=hi,
-                      description=f"faixa de negócio aceita: {lo:g} a {hi:g}"),
-            ]
+            numero = Annotated[float, Field(ge=lo, le=hi)]
+            if coluna in aceitam_vazio:
+                # `null` permitido, e a faixa continua valendo para o ramo float:
+                # `Total Charges: null` passa, `Total Charges: -999` não. O `ge`/`le`
+                # está no tipo interno de propósito — no externo ele rejeitaria o
+                # próprio `None` que a coluna existe para aceitar.
+                tipo = Annotated[
+                    numero | None,
+                    Field(alias=coluna,
+                          description=f"faixa de negócio aceita: {lo:g} a {hi:g}; "
+                                      f"`null` = sem ciclo de faturamento"),
+                ]
+            else:
+                tipo = Annotated[
+                    numero,
+                    Field(alias=coluna,
+                          description=f"faixa de negócio aceita: {lo:g} a {hi:g}"),
+                ]
         campos[campo] = (tipo, ...)
 
     return create_model(
@@ -219,7 +261,16 @@ class Saude(BaseModel):
     artefato_sha256: str
     n_features: int
     limiar_operacao: float
-    versoes: dict[str, str]
+    # 🚨 DOIS campos, não um. O antigo `versoes` vinha dos metadados do artefato
+    # (o ambiente que TREINOU) num endpoint que responde "o que este serviço tem".
+    # Medido no container: dizia Python 3.12.5, a imagem rodava 3.12.14. Ninguém
+    # mentiu — o rótulo respondia a outra pergunta, que é o modo de falha mais
+    # comum deste repositório e o mais caro justo aqui, onde o endpoint existe
+    # para declarar identidade.
+    versoes_treino: dict[str, str] = Field(
+        description="ambiente que treinou o modelo (carimbo gravado na promoção)")
+    versoes_runtime: dict[str, str] = Field(
+        description="ambiente que está servindo agora (medido no processo)")
 
 
 class ErroResponse(BaseModel):

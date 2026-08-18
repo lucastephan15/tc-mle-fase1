@@ -167,7 +167,8 @@ def criar_app(artefato: art_mod.Artefato | None = None) -> FastAPI:
             artefato_sha256=p.sha256,
             n_features=len(p.features),
             limiar_operacao=p.limiar,
-            versoes=p.versoes,
+            versoes_treino=p.versoes_treino,
+            versoes_runtime=p.versoes_runtime,
         )
 
     @app.post("/v1/predict", response_model=schema.PredicaoResponse, tags=["inferência"])

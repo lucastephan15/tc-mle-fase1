@@ -21,6 +21,7 @@ import subprocess
 import sys
 
 import pytest
+import sklearn
 from fastapi.testclient import TestClient
 
 from src import config
@@ -60,7 +61,11 @@ class PontuadorFalso:
         return list(BASE)
 
     @property
-    def versoes(self) -> dict[str, str]:
+    def versoes_treino(self) -> dict[str, str]:
+        return {}
+
+    @property
+    def versoes_runtime(self) -> dict[str, str]:
         return {}
 
     def pontuar(self, linhas: list[dict]) -> list[float]:
@@ -221,7 +226,15 @@ def test_health_declara_a_identidade_do_que_esta_carregado(cliente_real, art):
     assert corpo["versao_modelo"] == art.versao
     assert corpo["n_features"] == len(art.features)
     assert corpo["limiar_operacao"] == art.limiar
-    assert corpo["versoes"]["scikit-learn"]
+    # Duas perguntas diferentes, dois campos. Um campo `versoes` só, alimentado
+    # pelos metadados do artefato, respondia "com que ambiente o modelo foi
+    # treinado?" num endpoint cuja pergunta é "o que este serviço tem?". Medido
+    # no container: o campo dizia Python 3.12.5 e o processo rodava 3.12.14.
+    assert corpo["versoes_treino"]["scikit-learn"]
+    assert corpo["versoes_runtime"]["scikit-learn"] == sklearn.__version__
+    # O que NÃO pode divergir é o scikit-learn: é onde a serialização mora, e
+    # `artefato.carregar()` mata o processo no boot se as duas discordarem.
+    assert corpo["versoes_treino"]["scikit-learn"] == corpo["versoes_runtime"]["scikit-learn"]
 
 
 # --- Lógica isolada, com dublê ---------------------------------------------
@@ -284,7 +297,7 @@ def test_toda_numerica_tem_faixa_declarada(art):
     propósito: colar o limite no máximo do treino (72 meses) rejeitaria um
     cliente legítimo de 73. O alvo é `-999` e `1e9`, não a cauda.
     """
-    _, categorias = schema.contrato_do_pipeline(art.pipeline)
+    _, categorias, _ = schema.contrato_do_pipeline(art.pipeline)
     numericas = [c for c in art.pipeline.feature_names_in_ if c not in categorias]
     assert set(numericas) <= set(schema.FAIXAS), (
         f"sem faixa declarada: {set(numericas) - set(schema.FAIXAS)}"
@@ -338,3 +351,93 @@ def test_openapi_publica_o_contrato(cliente_real):
     assert "/v1/predict" in spec["paths"]
     assert "/v1/predict-batch" in spec["paths"]
     assert "/health" in spec["paths"]
+
+
+# --- O vazio declarado: o defeito que só o container revelou ----------------
+
+def test_vazio_de_total_charges_e_aceito_e_pontuado(cliente_real, art):
+    """O cliente do PRIMEIRO MÊS tem de poder ser pontuado.
+
+    🚨 Regressão real, encontrada em 18/08/2026 pelo teste de integração da Etapa
+    9e — e só porque ele mandou ao container as **1.409 linhas reais da
+    validação** em vez de um payload sintético escolhido a dedo. Uma delas
+    (índice 487) tem `Total Charges` vazio, e o contrato devolvia **422** para ela.
+
+    No Telco são **11 clientes, todos com `Tenure Months = 0`**: quem ainda não
+    teve ciclo de faturamento. A Etapa 2 decidiu que esse vazio é *medição
+    verdadeira* e o imputa com 0 — o pipeline sempre soube tratá-los. Quem não
+    sabia era o schema, e o resultado era a API recusando exatamente a população
+    que uma campanha de retenção mais quer pontuar.
+
+    🔑 *O contrato ficou mais estreito que o pipeline que ele protege* — o erro
+    simétrico do que o módulo de schema existe para impedir.
+    """
+    corpo = cliente_real.post("/v1/predict", json={**BASE, "Total Charges": None})
+    assert corpo.status_code == 200, corpo.json()
+    p_api = corpo.json()["predicoes"][0]["probabilidade"]
+
+    # E o número tem de ser o do pipeline, não um qualquer que "não falhou".
+    import numpy as np
+    import pandas as pd
+    X = pd.DataFrame([{**BASE, "Total Charges": np.nan}])
+    p_pipe = float(art.pipeline.predict_proba(X)[:, 1][0])
+    assert p_api == pytest.approx(p_pipe, abs=1e-12)
+
+
+def test_none_puro_quebraria_o_pipeline_se_nao_virasse_nan(art):
+    """A outra metade da correção — e sozinha nenhuma das duas serve.
+
+    Aceitar `null` no schema **sem** converter para `NaN` no serviço trocaria o
+    422 por um **500**: `pd.DataFrame` com `None` produz `dtype=object`, o
+    imputador não reconhece a ausência e o `LogisticRegression` levanta
+    `ValueError: Input X contains NaN`. Este teste fixa o mecanismo, não só o
+    resultado — se alguém "simplificar" a conversão no serviço, o teste acima
+    continuaria verde por acaso? Não: quebraria com 500. Este aqui diz **por quê**.
+    """
+    import pandas as pd
+    with pytest.raises(ValueError, match="NaN"):
+        art.pipeline.predict_proba(pd.DataFrame([{**BASE, "Total Charges": None}]))
+
+
+def test_vazio_NAO_e_aceito_onde_nao_significa_nada(cliente_real):
+    """`Tenure Months: null` continua 422, e a assimetria é deliberada.
+
+    O grupo `num` do pré-processamento também tem imputador (mediana), então o
+    pipeline *tecnicamente* aceitaria o vazio aqui também. Não é o que se quer:
+    em `Total Charges` o vazio significa "sem ciclo de faturamento" e o valor
+    imputado É essa informação; em `Tenure Months` um vazio é dado faltando do
+    integrador, e imputar a mediana do treino em silêncio transformaria uma falha
+    de integração numa predição plausível — a sentinela de nulo entrando pela
+    porta da frente. *O pipeline sabe imputar as duas; a API aceita o vazio só
+    onde ele quer dizer algo.*
+    """
+    for coluna in ("Tenure Months", "Monthly Charges"):
+        r = cliente_real.post("/v1/predict", json={**BASE, coluna: None})
+        assert r.status_code == 422, f"{coluna}: {r.json()}"
+
+
+def test_o_vazio_aceito_sai_do_ARTEFATO_e_nao_de_uma_lista_a_mao(art):
+    """Quem decide onde `null` vale é o pipeline, como todo o resto do contrato.
+
+    Se amanhã outra coluna entrar no grupo `zero` (ou sair dele), o schema
+    acompanha sozinho. Uma lista escrita à mão aqui seria a terceira cópia do
+    contrato — depois de `config.FEATURES` e do próprio artefato — e a que
+    diverge em silêncio.
+    """
+    _, _, aceitam_vazio = schema.contrato_do_pipeline(art.pipeline)
+    ct = art.pipeline.named_steps["preproc"]
+    do_pipeline = [c for nome, _, cols in ct.transformers_ if nome == "zero" for c in cols]
+    assert aceitam_vazio == do_pipeline
+    assert aceitam_vazio, "o grupo `zero` não pode estar vazio: é o tratamento da Etapa 2"
+
+
+def test_faixa_continua_valendo_na_coluna_que_aceita_vazio(cliente_real):
+    """Aceitar `null` não pode ter aberto a porta para `-999` e `1e9`.
+
+    O `ge`/`le` ficou no tipo INTERNO justamente por isso: no tipo externo ele
+    rejeitaria o próprio `None` que a coluna existe para aceitar, e a tentação
+    seria removê-lo — trocando um buraco por outro maior.
+    """
+    for valor in (-999, 1e9):
+        r = cliente_real.post("/v1/predict", json={**BASE, "Total Charges": valor})
+        assert r.status_code == 422, f"{valor}: {r.json()}"

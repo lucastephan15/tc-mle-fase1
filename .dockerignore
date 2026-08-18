@@ -1,0 +1,52 @@
+# O que entra na imagem — Etapa 9f.
+#
+# 🚨 ESTE ARQUIVO EXISTE PORQUE O DOCKER NÃO LÊ O .gitignore.
+#
+# O repositório já exclui `mlruns/`, `mlflow.db`, `data/processed`, `logs/*.jsonl`,
+# `.env` e `*.pem` — do GIT. Um `COPY . .` sem este arquivo copiaria todos eles para
+# dentro da imagem, mais o `.venv` (1,5 GB medidos, com binários arm64 de macOS indo
+# para uma imagem Linux) e o `.git`. Medido em 18/08/2026: `.` = 1,5 GB; sem
+# `.venv` e `.git`, ~9 MB.
+#
+# E o peso é o menor dos dois problemas: `data/raw` é o Telco com 7.043 clientes
+# reais e os `logs/*.jsonl` da Etapa 10 terão dado pessoal. **Camada Docker é
+# imutável** — um `RUN rm` numa camada posterior não apaga o arquivo da anterior;
+# quem puxar a imagem do registry tem o dado. A decisão precisa ser tomada ANTES
+# do COPY, porque depois não existe "apagar".
+#
+# 🔑 É uma ALLOWLIST, não uma lista de exclusões — e a escolha é deliberada.
+# Uma denylist protege contra o que já existe; a allowlist protege contra o que
+# ainda vai existir. O dia em que alguém criar `data/exportacoes/clientes.csv`,
+# uma denylist deixa passar em silêncio (é exatamente assim que dado pessoal
+# entra em imagem publicada) e a allowlist exige uma linha nova aqui, escrita
+# por alguém que teve de pensar no assunto.
+
+# Nada entra por padrão.
+*
+
+# --- O que a imagem de SERVIÇO precisa, e só isso ---------------------------
+
+# O código da aplicação. Não é `.` nem `src/**`: é o pacote inteiro, e nada mais.
+!src/
+
+# O lock da imagem de serviço — 24 distribuições, não as 115 do ambiente de
+# experimentação. Ver o cabeçalho de requirements-serve.in para o porquê.
+!requirements-serve.txt
+
+# 🚨 O artefato, por NOME, nunca `!models/*`.
+# `models/*` está no .gitignore com o motivo escrito ("o Registry é a fonte de
+# verdade, não o Git"), e a regra continua certa. Esta é uma exceção declarada de
+# 8.306 bytes: o Render constrói a imagem a partir do clone do Git, sem máquina
+# nossa no caminho e sem volume no plano gratuito, então o artefato só chega à
+# imagem se estiver versionado. Nomear o arquivo — em vez de abrir `models/*` —
+# é o que impede o próximo `.joblib` experimental de entrar de carona.
+!models/campeao.joblib
+
+# --- Reexclusões: coisas que entrariam DENTRO do que foi liberado ------------
+#
+# A allowlist libera diretórios inteiros, e diretório inteiro inclui lixo local.
+# Bytecode compilado no macOS não serve para nada num Linux e ainda invalida
+# camada de cache a cada build.
+**/__pycache__/
+**/*.py[cod]
+**/.DS_Store

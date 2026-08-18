@@ -1,0 +1,60 @@
+# Dependências da IMAGEM DE SERVIÇO — Etapa 9f.
+#
+# 🚨 Por que existe um segundo arquivo: o `requirements.in` descreve o ambiente de
+# EXPERIMENTAÇÃO (treinar, comparar, tunar, auditar), e a imagem que responde
+# `/v1/predict` não faz nada disso. Medido em 18/08/2026 no venv instalado:
+#
+#     venv completo (118 dists) .......... 1.498,8 MB
+#     fechamento de serviço (30 dists) ..... 273,9 MB
+#     só de treino/análise ............... 1.224,9 MB   <- 82% fora da imagem
+#
+# `torch` sozinho são 529 MB — e **o campeão é uma regressão logística de 8,3 KB
+# que não importa torch em lugar nenhum**. Ele está no repo porque a Etapa 8 é
+# exigência da fase; a Etapa 8 é treino, e treino não vai para a imagem.
+#
+# 🔑 É a mesma distinção **código ≠ dependência** do `requirements-ci.txt`: o MLP
+# perdedor continua versionado (reprodutibilidade e aprendizado organizacional),
+# e mesmo assim não está no runtime da API. Guardar o código não é guardar a
+# dependência.
+#
+# ⚠️ E NÃO se constrói esta lista a partir do `requirements.txt` que o MLflow grava
+# dentro do artefato: medido nos 9 artefatos do `mlruns/`, o snapshot é IDÊNTICO
+# nos nove e declara `torch` e `pytest` até no da LogReg — porque o MLflow infere
+# requisitos dos **módulos importados pelo processo que logou**, não do objeto
+# serializado. Ele inventaria a máquina, não a necessidade do modelo.
+
+# --- Servidor -------------------------------------------------------------
+fastapi
+pydantic
+uvicorn[standard]     # os extras ficam DE PROPÓSITO, e a economia de não tê-los
+                      # seria de 8,5 MB em 273,9 (3%). O que se compra com eles é
+                      # coerência: o servidor da imagem é o mesmo binário exercitado
+                      # localmente por `make api` e pelos testes. Divergir aqui
+                      # criaria a segunda verdade que o lock existe para impedir —
+                      # por 3% de imagem. (`watchfiles` vem junto e serve ao
+                      # `--reload`, que o CMD não usa; `uvloop` e `httptools` são
+                      # os que valem.)
+
+# --- Inferência -----------------------------------------------------------
+scikit-learn          # traz scipy (97,4 MB) e narwhals: 91% do peso da imagem está
+                      # aqui e no pandas, contra 8,3 KB de modelo. O que não cabe
+                      # numa função serverless não é o modelo — é o que ele precisa
+                      # para existir.
+pandas                # o `ColumnTransformer` seleciona colunas POR NOME: a entrada
+                      # da API é DataFrame, não ndarray. Não é conveniência.
+numpy
+joblib                # `src/artefato.py` importa diretamente — dependência que o
+                      # código importa é dependência declarada, mesmo chegando de
+                      # carona pelo scikit-learn.
+
+# --- O que NÃO entra, e por quê -------------------------------------------
+#   torch, mlflow, shap, fairlearn, matplotlib, seaborn, numba/llvmlite, pyarrow
+#       -> treino, rastreabilidade de experimento, explicabilidade e gráficos.
+#          Nada disso é chamado por `src/api/`.
+#   pytest, ruff, httpx2
+#       -> qualidade. Rodam no CI, num ambiente que instala o requirements.txt
+#          completo. Testar dentro da imagem de serviço exigiria colocar o
+#          test runner em produção.
+#   openpyxl
+#       -> lê o .xlsx bruto. A API não lê dado bruto: ela carrega um artefato
+#          treinado (e o bruto é LGPD e está fora da imagem pelo .dockerignore).

@@ -12,6 +12,17 @@ data/processed/*
 # Artefatos de modelo — o Registry é a fonte de verdade, não o Git
 models/*
 !models/.gitkeep
+# 🚨 EXCEÇÃO DECLARADA (Etapa 9f, 18/08/2026): o artefato promovido, POR NOME.
+# A regra acima continua valendo e continua certa. O que mudou é o destino: a
+# plataforma de deploy constrói a imagem a partir do CLONE DO GIT, sem máquina
+# nossa no caminho e sem volume no plano gratuito — então ou o artefato está
+# versionado, ou a imagem sobe sem modelo. São 8.306 bytes, imutáveis entre
+# promoções (muda o conteúdo, não o tamanho), e o ganho colateral é que ele passa
+# a ter sha256 rastreável pelo Git, que `src/artefato.py` já verifica na carga.
+# É `!models/campeao.joblib` e NUNCA `!models/*`: nomear o arquivo é o que impede
+# o próximo .joblib experimental de entrar de carona.
+# Exceção declarada com motivo é decisão; exceção silenciosa é a regra apodrecendo.
+!models/campeao.joblib
 
 # MLflow local
 mlruns/

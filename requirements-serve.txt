@@ -1,0 +1,47 @@
+# Versões TRAVADAS da imagem de serviço — gerado a partir de requirements-serve.in.
+#
+# Como foi produzido (18/08/2026): fechamento transitivo REAL calculado sobre o venv
+# instalado (`importlib.metadata`, com os extras de `uvicorn[standard]` avaliados por
+# marker), e cada pacote pinado com **a mesma versão do requirements.txt**.
+#
+# 🚨 O "mesma versão" é o ponto, não um detalhe de processo. `src/artefato.py`
+# compara a versão do scikit-learn gravada no artefato com a do ambiente e levanta
+# `ArtefatoIncompativel` **na carga** se divergirem. Um lock de serviço resolvido de
+# forma independente traria um sklearn diferente daqui a algumas semanas — e o
+# container morreria no boot com a mensagem certa, o que é bom, mas depois do deploy.
+# Derivar do lock que já existe faz a divergência ser impossível em vez de detectável.
+#
+# ⚠️ NÃO regenerar com `pip freeze` dentro de um venv de serviço: `pip freeze` reporta
+# o que a MÁQUINA tem instalado, não o que o serviço precisa — é a mesma armadilha do
+# snapshot do MLflow, um nível abaixo.
+
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.14.2
+click==8.4.2
+fastapi==0.141.1
+h11==0.16.0
+httptools==0.8.0
+idna==3.18
+joblib==1.5.3
+narwhals==2.24.0
+numpy==2.4.6
+pandas==2.3.3
+pydantic==2.13.4
+pydantic_core==2.46.4
+python-dateutil==2.9.0.post0
+python-dotenv==1.2.2
+pytz==2026.3.post1
+PyYAML==6.0.3
+scikit-learn==1.9.0
+scipy==1.18.0
+six==1.17.0
+starlette==1.6.0
+threadpoolctl==3.6.0
+typing_extensions==4.16.0
+typing-inspection==0.4.3
+tzdata==2026.3
+uvicorn==0.52.1
+uvloop==0.22.1
+watchfiles==1.2.0
+websockets==17.0.1
