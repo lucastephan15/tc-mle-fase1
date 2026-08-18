@@ -33,7 +33,7 @@ from typing import Annotated
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 
 from src import artefato as art_mod
 from src.api import schema, servico
@@ -151,6 +151,27 @@ def criar_app(artefato: art_mod.Artefato | None = None) -> FastAPI:
         )
 
     # --- Rotas -------------------------------------------------------------
+
+    @app.get("/", include_in_schema=False)
+    def raiz():
+        """Leva quem abre a URL no navegador para a documentação interativa.
+
+        Existe por um motivo de ENTREGA, não de arquitetura: sem ela, a primeira
+        coisa que um avaliador vê ao abrir o endereço do serviço é
+        `{"detail":"Not Found"}` — um 404 correto (a rota não existe mesmo) e
+        péssimo como primeira impressão. O `/docs` **é** a documentação de
+        interface da entrega, então é para lá que a raiz aponta.
+
+        ⚠️ Duas exceções deliberadas às regras da casa, ambas por não haver o que
+        proteger: sem `response_model` (um redirecionamento não tem corpo, logo
+        não há campo a vazar) e fora do schema OpenAPI (`include_in_schema=False`),
+        porque publicar "a raiz redireciona" não é contrato de API — é
+        conveniência de navegador.
+
+        📌 Acoplamento declarado: se um dia o `/docs` for desligado (o que se faz
+        quando a API sai da rede interna), esta rota tem de mudar junto.
+        """
+        return RedirectResponse(url="/docs")
 
     @app.get("/health", response_model=schema.Saude, tags=["operação"])
     def health(p: Servico):

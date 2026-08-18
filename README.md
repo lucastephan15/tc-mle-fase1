@@ -85,8 +85,8 @@ make help       # todos os alvos
 
 ### A API
 
-**No ar:** https://tc-churn-api.onrender.com — `/health` · `/docs` · `/v1/predict` ·
-`/v1/predict-batch`.
+**No ar:** https://tc-churn-api.onrender.com — a raiz leva à **documentação interativa**
+(`/docs`), gerada da OpenAPI. Rotas: `/health` · `/v1/predict` · `/v1/predict-batch`.
 
 ⚠️ Plano gratuito: o serviço **dorme após 15 min sem tráfego** e a primeira requisição depois
 disso leva cerca de um minuto. Acorde-o antes de demonstrar.

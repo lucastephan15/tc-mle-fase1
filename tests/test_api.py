@@ -441,3 +441,22 @@ def test_faixa_continua_valendo_na_coluna_que_aceita_vazio(cliente_real):
     for valor in (-999, 1e9):
         r = cliente_real.post("/v1/predict", json={**BASE, "Total Charges": valor})
         assert r.status_code == 422, f"{valor}: {r.json()}"
+
+
+def test_raiz_leva_para_a_documentacao(cliente_real):
+    """A raiz não pode responder 404 — é o primeiro endereço que alguém abre.
+
+    Encontrado com o serviço já publicado: `GET /` devolvia
+    `{"detail":"Not Found"}`. Era um 404 **correto** (a rota não existia) e ruim
+    como entrega, porque é exatamente a URL que vai na documentação e no vídeo.
+
+    O teste checa o redirecionamento SEM segui-lo: seguir mediria o `/docs`, que
+    é outra rota, e o que se quer fixar aqui é que a raiz aponta para algum lugar
+    útil em vez de recusar.
+    """
+    r = cliente_real.get("/", follow_redirects=False)
+    assert r.status_code in (307, 308), r.status_code
+    assert r.headers["location"] == "/docs"
+    # E o destino existe de fato — senão o redirecionamento seria uma promessa
+    # para um 404, que é pior que o 404 direto.
+    assert cliente_real.get("/docs").status_code == 200
