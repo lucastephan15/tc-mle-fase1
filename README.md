@@ -85,6 +85,14 @@ make help       # todos os alvos
 
 ### A API
 
+**No ar:** https://tc-churn-api.onrender.com — `/health` · `/docs` · `/v1/predict` ·
+`/v1/predict-batch`.
+
+⚠️ Plano gratuito: o serviço **dorme após 15 min sem tráfego** e a primeira requisição depois
+disso leva cerca de um minuto. Acorde-o antes de demonstrar.
+
+Localmente:
+
 ```bash
 make promover && make api
 
@@ -150,6 +158,27 @@ bytes, porque a plataforma de deploy constrói a imagem a partir do clone do Git
 valendo para todo o resto; exceção declarada com motivo é decisão, exceção silenciosa é a regra
 apodrecendo.
 
+### O deploy
+
+O serviço roda a partir do `render.yaml` versionado — **o deploy é código, não memória de quem
+clicou num painel**. A plataforma constrói a imagem a partir do clone do Git, e é por isso que o
+artefato promovido precisou ser versionado.
+
+🎯 **`autoDeployTrigger: checksPass` fecha o CI/CD:** nenhum commit chega à nuvem sem o
+`make ci` ter passado no GitHub Actions. O default da plataforma publicaria a cada push —
+entrega contínua **sem** integração contínua.
+
+🚨 **Um defeito que só a nuvem revelou, e vale a leitura:** o serviço passou a responder
+`x-render-routing: no-server` em **48% das requisições**, com a aplicação respondendo 200 a tudo
+que lhe chegava e zero restarts. Causa: a porta estava declarada **em dois lugares com valores
+diferentes** — `EXPOSE 8000` no Dockerfile, processo escutando em `${PORT:-8000}` = 10000 (o
+default da plataforma), e a plataforma *detectando* qual era. Declarar `PORT: 8000` alinhou os
+três e levou o roteamento a **120/120**. *O `EXPOSE` é documentação, e documentação que discorda
+do processo é uma afirmação que alguém vai ler — aqui, uma máquina.*
+
+**Verificado em produção com o mesmo script da Etapa 9e:** PR-AUC **0,6646020519** local ×
+**0,6646020519** na nuvem — idêntico nos 10 dígitos, com 0 decisões trocadas no limiar.
+
 ### O que o CI faz
 
 | Job | Faz | Falha quando |
@@ -189,7 +218,7 @@ Três decisões que valem a leitura, todas em `.github/workflows/ci.yml` e no de
 | 6 · Comparação de algoritmos | ✅ concluída — §5b · **empate técnico** entre LogReg, HGB e RF (0,07 dp) |
 | 7 · Tuning | ✅ concluída — §5c · **ganho zero**: o default da LogReg já era o pico da grade |
 | 8 · MLP em PyTorch | ✅ concluída — §5d · **a rede não superou** (0,6615 × 0,6646), e a regra 1-SE elegeu profundidade **zero** |
-| 9 · Pipeline serializado + API | 🟡 **9c, 9d, 9e e 9f concluídas** — §5e · artefato promovido com identidade verificada na carga, API FastAPI de pé (`/health` · `/v1/predict` · `/v1/predict-batch`) e **imagem `linux/amd64` servindo o mesmo modelo** (PR-AUC idêntico nos 10 dígitos entre macOS e Linux, 0 decisões trocadas). Falta o **deploy em nuvem** (bônus de +5%) |
+| 9 · Pipeline serializado + API | ✅ **concluída (9c → 9f-quater)** — §5e · artefato promovido com identidade verificada na carga, API FastAPI de pé (`/health` · `/v1/predict` · `/v1/predict-batch`) e **imagem `linux/amd64` servindo o mesmo modelo** (PR-AUC idêntico nos 10 dígitos entre macOS e Linux, 0 decisões trocadas). **No ar em https://tc-churn-api.onrender.com**, com o deploy versionado em `render.yaml` e travado atrás do CI |
 | 9.5 · CI/CD | 🟡 **parcial** — QA + gate de dois eixos rodando; falta o registro (depende da Etapa 9) |
 | 10 · Monitoramento | ⬜ |
 | 10.5 · Governança e fairness | ⬜ |

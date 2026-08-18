@@ -1630,6 +1630,112 @@ a ponta na imagem `linux/amd64`.
 
 ---
 
+### 9f-quater · O deploy (18/08/2026) — e o defeito que só a nuvem revelou
+
+**URL:** https://tc-churn-api.onrender.com · plano gratuito (512 MB · 0,1 CPU, números da
+documentação oficial).
+
+A escolha de destino é PaaS, e a defesa é por medição, não por preferência: **FaaS foi descartado
+com número** (o fechamento de serviço tem 253,2 MB contra o limite de 250 MB de função por zip —
+estoura por 1,3% antes mesmo do adaptador e do artefato) e IaaS exigiria administrar máquina. A
+portabilidade da imagem é o que impede isso de virar aprisionamento: **a mesma imagem roda local,
+em VM, em Kubernetes ou noutro PaaS** — trocar de destino não reescreve a aplicação.
+
+#### O deploy é código, não memória de quem clicou
+
+`render.yaml` na raiz. Tudo ali poderia ter sido preenchido no painel; a diferença é que painel não
+entra no `git log`, não é revisável e não responde *"por que o serviço está assim?"* seis meses
+depois. Mesmo argumento do `Makefile` contra "os comandos que eu sei de cabeça".
+
+⚠️ **Os campos foram conferidos contra a documentação vigente, e o principal havia mudado de
+nome:** não existe mais `autoDeploy: true|false`, e sim **`autoDeployTrigger`**. Escrever de
+memória produziria um YAML que a plataforma aceita **ignorando o campo** — a configuração que você
+acha que fez, e não fez. É a regra da Etapa 7 (*conferir a assinatura antes de montar a grade*)
+valendo para infraestrutura.
+
+#### 🎯 O último elo do CI/CD, por uma linha
+
+`autoDeployTrigger: checksPass` faz o Render **esperar os checks do GitHub Actions** e só implantar
+se todos passarem. O default (`commit`) publicaria a cada push — **entrega contínua sem integração
+contínua**, o exato anti-padrão que o backlog previa. O plano era desligar o auto-deploy e disparar
+por webhook no fim do job, com um secret a gerenciar; a plataforma já resolvia isso nativamente.
+**Verificado funcionando:** o commit da correção de porta só foi implantado depois de o CI fechar
+verde.
+
+⚠️ Efeito colateral a conhecer: o Render **não implanta** commit sem check algum. Aqui o
+`ci.yml` dispara em todo push na `main`, mas se um dia ele ganhar filtro de `paths:`, commits fora
+deles deixariam de implantar **em silêncio**.
+
+#### 🚨 O defeito: a porta declarada em dois lugares com valores diferentes
+
+Logo após o primeiro deploy, o serviço passou a responder **`x-render-routing: no-server` em 48%
+das requisições**. O diagnóstico dependeu de separar camadas, e todas as pistas apontavam para
+fora da aplicação:
+
+| evidência | o que elimina |
+|---|---|
+| os 404 **não têm** `x-render-origin-server: uvicorn` | nunca chegaram à aplicação |
+| nos logs do serviço, **todos** os `/health` são 200 | a aplicação não errou uma requisição |
+| **zero restarts**, nenhum OOM nos eventos | não era crash loop nem memória |
+| quando respondia, o `sha256` era **o correto** | não era artefato errado |
+| local, `--cpus 0.1` **nativo** sobe em 1-2 s | não era a CPU do plano gratuito |
+
+🔑 **A causa estava numa linha do log que passa despercebida:** `==> Detected service running on
+port 10000`, aparecendo **centenas de requisições depois** de o serviço já estar de pé. O Render
+estava *procurando* a porta. E procurava porque nós declaramos duas: o `EXPOSE` do Dockerfile dizia
+**8000**, o processo escutava em `${PORT:-8000}` = **10000** (o default da plataforma). A
+documentação usa o advérbio que descreve exatamente o sintoma: *"Render is **usually** able to
+detect and use it"*.
+
+✅ **Correção: `PORT: 8000` no `render.yaml`** ⇒ `EXPOSE`, `CMD` e plataforma passam a declarar o
+mesmo número, e não há mais nada a detectar. Medido depois: **120 requisições, 120 respostas 200**.
+
+🚨 **E o raciocínio que produziu o defeito era bom** — está escrito na primeira versão do arquivo:
+*"não fixar a porta, porque é um parâmetro que a plataforma reivindica"*. O erro foi confundir
+**não declarar** com **delegar**: não declarar não devolve a decisão à plataforma, devolve a uma
+**heurística de detecção**. Delegar de verdade seria declarar o valor que ela usa.
+
+🔑 *O `EXPOSE` é documentação — e documentação que discorda do processo é uma afirmação que alguém
+vai ler; aqui, uma máquina.* É a mesma família do campo `versoes` do `/health` corrigido horas
+antes: nada estava "errado", o **rótulo** é que respondia a outra pergunta. A diferença é que ali o
+leitor enganado seria humano, e aqui foi o roteador.
+
+⚠️ Ressalva honesta: a documentação **não** confirma que o Render lê o `EXPOSE` para decidir a
+porta, então o mecanismo exato permanece hipótese. A correção não depende dela — declarar a porta
+nos dois lados remove a ambiguidade que qualquer heurística teria de resolver.
+
+#### Verificação em produção — o mesmo script da 9e, contra a URL pública
+
+| verificação | resultado |
+|---|---|
+| identidade | **PR-AUC 0,6646020519 local × 0,6646020519 na nuvem** — idêntico nos 10 dígitos; 37% das linhas diferindo em 1 ulp e **0 decisões trocadas** |
+| contrato de erro | categoria inédita · `-999` · campo extra · campo faltando ⇒ **422**; vazio declarado ⇒ **200**; nenhum devolvendo valor do payload |
+| latência (Brasil → Oregon, 0,1 CPU) | unitário p50 **254 ms** / p95 670 ms · lote de 1.409 p50 **911 ms** |
+| `/health` sob carga | com **8 lotes de 1.409 em voo**, a probe respondeu p50 968 ms e máx 1.576 ms — o `def` em vez de `async def` segurando a probe também na nuvem |
+
+⚠️ A latência é dominada por rede e por 0,1 CPU, não pelo modelo: o `x-response-time-ms` que a
+própria API devolve marca **1,16 ms** para o mesmo `/health` que leva 254 ms de round-trip.
+*Medir latência sem dizer onde o cronômetro estava é métrica sem piso.*
+
+#### Cold start: risco de ENTREGA, não de operação
+
+O plano gratuito **dorme após 15 minutos sem tráfego** e o spin-up leva cerca de um minuto (o
+painel avisa "50 segundos ou mais"). Medido: a primeira requisição após o deploy levou **29,8 s**.
+
+🚨 **A consequência é sobre o vídeo da Etapa 11, não sobre produção:** gravar com a API dormindo
+trava a demonstração no primeiro `curl`. **Mitigação, que não é técnica: acordar o serviço alguns
+minutos antes de gravar.** Não há prazo — o serviço acorda sempre que chamado.
+
+#### Limitações declaradas do deploy
+
+- **Instância única, sem redundância.** Plano gratuito: se ela cair, não há para onde rotear.
+- **Sem domínio próprio e sem autenticação** — a segunda é decisão registrada, não esquecimento.
+- **HTTPS termina no proxy da plataforma**; a aplicação fala HTTP na rede interna.
+- **Build minutes são limitados** e cada build consome de 3 a 5 minutos. Com `checksPass`, só
+  commits aprovados pelo CI consomem cota — o que é mais uma vantagem dele.
+
+---
+
 ## 6. Decisão do modelo final
 
 *(preenchida ao fim da Etapa 8 — a fase de modelagem está fechada; o teste segue intocado até a
