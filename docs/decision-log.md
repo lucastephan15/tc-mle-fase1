@@ -1726,6 +1726,51 @@ painel avisa "50 segundos ou mais"). Medido: a primeira requisição após o dep
 trava a demonstração no primeiro `curl`. **Mitigação, que não é técnica: acordar o serviço alguns
 minutos antes de gravar.** Não há prazo — o serviço acorda sempre que chamado.
 
+#### 🚨 Os DOIS 404 do dia, e por que a distinção é o método
+
+Horas depois de publicar, abrir a URL no navegador devolvia `{"detail":"Not Found"}`. Parecia o
+problema de roteamento voltando; era outra coisa inteiramente, e os headers separam as duas em
+segundos:
+
+| | roteamento (48% das requisições) | raiz inexistente |
+|---|---|---|
+| `x-render-routing` | **`no-server`** | ausente |
+| `x-render-origin-server` | **ausente** | `uvicorn` |
+| `x-request-id` (nosso middleware) | ausente | **presente** |
+| corpo | `Not Found` em texto puro | `{"detail":"Not Found"}` |
+| camada | o roteador, sem rota registrada | a aplicação, respondendo corretamente |
+
+🔑 *Mesmo status HTTP, camadas diferentes, correções diferentes.* O primeiro era um defeito de
+configuração; o segundo era a aplicação **certa**, dizendo que `GET /` não existe — o que era
+verdade, porque nunca escrevemos essa rota.
+
+✅ **A correção é de ENTREGA, não de arquitetura:** a raiz agora redireciona para `/docs`. O
+motivo é que aquele endereço é o que vai na documentação e no vídeo, e é a primeira coisa que um
+avaliador abre — receber um 404 tecnicamente correto ali é a pior primeira impressão possível por
+uma rota de três linhas. ⚠️ Duas exceções deliberadas às regras da casa, ambas por não haver o que
+proteger: **sem `response_model`** (um redirecionamento não tem corpo, logo não há campo a vazar) e
+**fora do schema OpenAPI**, porque "a raiz redireciona" é conveniência de navegador, não contrato
+de API. 📌 Acoplamento declarado: se o `/docs` for desligado (o que se faz ao tirar a API da rede
+interna), esta rota muda junto.
+
+⚠️ **E o teste verifica o redirecionamento SEM segui-lo**, além de conferir que o destino existe:
+seguir mediria o `/docs`, que é outra rota, e **redirecionar para um 404 seria pior que o 404
+direto**.
+
+#### Nota de medição: o cold start de spin-down NÃO foi medido
+
+O número que temos é **29,8 s** para a primeira requisição **após um deploy**, que é fenômeno
+diferente do spin-down por inatividade. A medição do spin-down foi tentada e **invalidou-se**: o
+serviço precisa de 15 minutos sem tráfego nenhum, e nesse intervalo houve polling de verificação e
+dois redeploys — o relógio de inatividade zerou a cada um, e a "primeira requisição após o
+spin-down" saiu em 0,247 s, ou seja, mediu um serviço acordado.
+
+🔑 *Registrar a medição inválida vale mais que substituí-la pelo número que a plataforma declara* —
+e a ação que dela decorre não muda: **acordar o serviço antes de gravar**. Para medir de verdade é
+preciso 15 minutos de silêncio deliberado, o que só faz sentido fazer quando ninguém estiver
+trabalhando no repositório. Referência da plataforma: spin-down em 15 min, spin-up de "50 segundos
+ou mais".
+
 #### Limitações declaradas do deploy
 
 - **Instância única, sem redundância.** Plano gratuito: se ela cair, não há para onde rotear.
