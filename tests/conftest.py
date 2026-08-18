@@ -15,7 +15,7 @@ from __future__ import annotations
 import pytest
 from sklearn.pipeline import Pipeline
 
-from src import artefato, config, data, gate
+from src import artefato, data, gate, promover
 
 
 @pytest.fixture(scope="session")
@@ -29,17 +29,28 @@ def promovido(dados, tmp_path_factory) -> tuple[Pipeline, object]:
 
     Os dois lados são necessários: o round-trip compara memória contra disco, e
     comparar o disco com ele mesmo não prova nada.
+
+    🔑 **Os metadados saem de `promover.montar_metadados`, não de um dict escrito
+    aqui.** Eram duas construções paralelas do mesmo objeto, e o custo apareceu
+    na Etapa 10a-2: `carregar(estrito=True)` passou a exigir a `referencia`, e a
+    fixture — que montava o dict à mão — teria derrubado a suíte inteira por
+    estar desatualizada em relação ao que a promoção real grava. Um teste que
+    reconstrói o objeto sob teste testa a reconstrução.
+
+    É o mesmo movimento do item 85, quando `gate.medir()` foi extraída para que
+    o CI e o teste de caracterização medissem O MESMO objeto em vez de dois
+    irmãos: **o teste puxa o desenho**.
     """
     pipe = gate.treinar_campeao(dados)
-    _, custo = gate.medir(dados, pipe=pipe)
+    metricas, custo = gate.medir(dados, pipe=pipe)
     caminho = tmp_path_factory.mktemp("modelo") / "campeao.joblib"
-    artefato.salvar(pipe, {
-        "versao_modelo": config.VERSAO_MODELO,
-        "modelo": config.GATE_MODELO_REFERENCIA,
-        "features": list(pipe.feature_names_in_),
-        "limiar_operacao": float(custo["limiar_otimo"]),
-        "dataset_sha256": dados.sha256,
-    }, caminho=caminho)
+    artefato.salvar(
+        pipe,
+        promover.montar_metadados(
+            dados, metricas, custo, features=list(pipe.feature_names_in_),
+        ),
+        caminho=caminho,
+    )
     return pipe, caminho
 
 

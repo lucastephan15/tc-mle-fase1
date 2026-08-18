@@ -96,6 +96,19 @@ class Artefato:
         """
         return float(self.metadados["limiar_operacao"])
 
+    @property
+    def referencia(self) -> dict[str, Any]:
+        """Distribuição do treino congelada na promoção — Etapa 10a-2.
+
+        Mesma justificativa do `limiar`, um passo adiante: o baseline contra o
+        qual se mede drift é propriedade DAQUELE modelo. Um `referencia.json`
+        ao lado do `.joblib` seria o par "dois arquivos que podem não combinar"
+        que a decisão nº 1 deste módulo existe para proibir — e nesta variante a
+        falha é pior que rótulo errado, porque não falha: baseline de um modelo
+        contra predições de outro mede drift fantasma, ou deixa de ver o real.
+        """
+        return dict(self.metadados["referencia"])
+
 
 def sha256_arquivo(caminho: Path) -> str:
     """Identidade verificável do artefato — o equivalente barato de um run_id."""
@@ -140,7 +153,7 @@ def salvar(pipeline: Pipeline, metadados: dict[str, Any],
 
 
 def carregar(caminho: Path = config.ARTEFATO, estrito: bool = True) -> Artefato:
-    """Carrega e VERIFICA. As três checagens são o conteúdo da função.
+    """Carrega e VERIFICA. As quatro checagens são o conteúdo da função.
 
     `estrito=False` existe para inspeção manual de artefato antigo (arqueologia
     de um número já reportado). Nunca para a API: quem serve verifica.
@@ -190,6 +203,36 @@ def carregar(caminho: Path = config.ARTEFATO, estrito: bool = True) -> Artefato:
             f"como 422 na validação."
         )
 
+    # (4) baseline de drift — Etapa 10a-2. Um artefato sem referência CARREGA
+    #     sem erro (todos os acessos a metadados usam `.get`), sobe, responde
+    #     200 e só falha três semanas depois, na análise: o PSI seria calculado
+    #     contra um dict vazio, ou não seria calculado e ninguém notaria a
+    #     ausência de alerta. Ausência de alarme é indistinguível de ausência de
+    #     problema — por isso a exigência é aqui, na carga, e não lá.
+    #
+    #     A cobertura é comparada com as features DECLARADAS pelo mesmo motivo da
+    #     checagem (3): duas listas mantidas iguais pela memória de quem escreveu
+    #     divergem em silêncio. Baseline de 13 colunas para um modelo de 12 mede
+    #     drift de uma coluna que o modelo não usa mais.
+    if estrito:
+        ref = metadados.get("referencia") or {}
+        cobertas = set(ref.get("numericas", {})) | set(ref.get("categoricas", {}))
+        if not cobertas:
+            raise ArtefatoIncompativel(
+                f"{caminho} não tem as estatísticas de referência do treino "
+                f"(chave 'referencia'). Artefato promovido antes da Etapa 10a-2? "
+                f"Rode `make promover` — sem baseline não existe drift para "
+                f"detectar, só um gráfico comparando nada."
+            )
+        if esperadas and cobertas != set(esperadas):
+            faltam = sorted(set(esperadas) - cobertas)
+            sobram = sorted(cobertas - set(esperadas))
+            raise ArtefatoIncompativel(
+                f"a referência de drift não cobre as features servidas — "
+                f"faltam {faltam}, sobram {sobram}. O baseline e o contrato de "
+                f"colunas saíram de promoções diferentes."
+            )
+
     return Artefato(
         pipeline=pipeline,
         metadados=metadados,
@@ -209,6 +252,10 @@ def descrever(a: Artefato) -> str:
         f"modelo          : {m.get('modelo')}",
         f"features        : {len(a.features)}",
         f"limiar_operacao : {m.get('limiar_operacao')}",
+        f"referencia      : {len(m.get('referencia', {}).get('numericas', {}))} "
+        f"numéricas + {len(m.get('referencia', {}).get('categoricas', {}))} "
+        f"categóricas · n={m.get('referencia', {}).get('n')} "
+        f"({m.get('referencia', {}).get('particao')})",
         f"promovido_em    : {m.get('promovido_em')}",
         f"commit          : {m.get('commit')}",
         f"dataset_sha256  : {str(m.get('dataset_sha256'))[:16]}…",

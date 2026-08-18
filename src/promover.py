@@ -32,7 +32,7 @@ from datetime import UTC, datetime
 
 import numpy as np
 
-from src import artefato, config, data, gate
+from src import artefato, config, data, gate, referencia
 from src.train import commit_hash
 
 
@@ -44,6 +44,17 @@ def montar_metadados(dados: data.Dados, metricas: dict, custo: dict,
     o config acompanha o código, o artefato acompanha o modelo servido, e os
     dois só coincidem enquanto ninguém promove um modelo treinado com outro
     config. A fonte de verdade do contrato é o artefato.
+
+    🔑 **A `referencia` entra aqui pelo mesmo argumento do limiar** (Etapa 10a-2):
+    a distribuição do treino é propriedade DO MODELO SERVIDO, não do repositório
+    — muda quando o modelo muda. Congelada junto, ela viaja com o artefato até o
+    container, e é isso que permite calcular drift **sem o dataset**: o dado
+    bruto é LGPD, não entra na imagem, e uma referência que exigisse relê-lo não
+    rodaria onde o drift acontece.
+
+    ⚠️ Calculada sobre `dados.treino.X` e só sobre ele: validação e teste julgam
+    o modelo, e misturá-los ao baseline confundiria "o que o modelo viu" com "o
+    que o mediu".
     """
     return {
         "versao_modelo": config.VERSAO_MODELO,
@@ -62,6 +73,11 @@ def montar_metadados(dados: data.Dados, metricas: dict, custo: dict,
         "seed": config.SEED,
         "promovido_em": datetime.now(UTC).isoformat(timespec="seconds"),
         "avaliado_em": "validacao",  # o teste segue intocado
+        # Etapa 10a-2 — o denominador do drift. Sem isto não existe detecção,
+        # só um gráfico comparando nada.
+        "referencia": referencia.calcular(
+            dados.treino.X, config.NUM_ZERO + config.NUM, config.CAT,
+        ),
     }
 
 
@@ -105,9 +121,24 @@ def main() -> int:
               f"{len(p_disco)} predições. O artefato NÃO é o modelo avaliado.")
         return 1
 
+    # E os METADADOS sobreviveram? O round-trip acima compara probabilidades, e
+    # probabilidade não passa por `referencia`, `limiar_operacao` nem `features`
+    # — ou seja, a checagem que existia deixava passar metadado corrompido (item
+    # 109 do revisita). Desde a Etapa 10a-2 isso deixou de ser teórico: o
+    # baseline de drift é um dict aninhado com ~2,5 KB que **nada** no caminho
+    # feliz da API lê, então um erro ali só apareceria na primeira análise de
+    # drift, semanas depois, como número errado — não como erro.
+    if recarregado.metadados != {**metadados, "versoes": artefato.versoes_do_ambiente()}:
+        print("\n❌ ROUND-TRIP DE METADADOS FALHOU: o que foi gravado não é o "
+              "que foi montado. O artefato prediz igual e DECLARA outra coisa.")
+        return 1
+
     print(f"\n✅ PROMOVIDO em {config.ARTEFATO.relative_to(config.RAIZ)}")
+    ref = recarregado.referencia
     print(f"   sha256 {sha[:16]}…  ·  round-trip bit a bit em "
           f"{len(p_disco)} predições: idêntico")
+    print(f"   baseline de drift: {len(ref['numericas'])} numéricas + "
+          f"{len(ref['categoricas'])} categóricas sobre n={ref['n']} do treino")
     print("\n" + artefato.descrever(recarregado))
     return 0
 
