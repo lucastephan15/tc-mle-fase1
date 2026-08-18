@@ -83,6 +83,14 @@ RUN useradd --system --no-create-home --shell /usr/sbin/nologin appuser \
     && chown -R appuser:appuser /app
 USER appuser
 
+# 🚨 O número aqui e o do `CMD` TÊM de ser o mesmo, e isso não é convenção de
+# estilo: um PaaS lê a imagem para descobrir onde o serviço escuta. Com `EXPOSE
+# 8000` e o processo em `${PORT:-8000}` = 10000 (o default do Render), o
+# roteamento ficou intermitente — 48% das requisições com `no-server`, enquanto a
+# aplicação respondia 200 a tudo que lhe chegava. Quem alinha os dois é o
+# `render.yaml`, declarando `PORT: 8000`.
+# *O EXPOSE é documentação; documentação que discorda do processo é uma afirmação
+# que alguém vai ler — aqui, uma máquina.*
 EXPOSE 8000
 
 # --- HEALTHCHECK -----------------------------------------------------------

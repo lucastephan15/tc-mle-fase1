@@ -56,9 +56,36 @@ services:
     autoDeployTrigger: checksPass
 
     envVars:
-      # A porta NÃO é declarada: o Render injeta `PORT` e o `CMD` do Dockerfile
-      # já a lê (`${PORT:-8000}`). Fixar a porta seria assumir o controle de um
-      # parâmetro que a plataforma reivindica.
+      # 🚨 A PORTA É DECLARADA, e a primeira versão deste arquivo não a declarava.
+      #
+      # O raciocínio original era bom e o resultado foi ruim: *"não fixar a porta,
+      # porque é um parâmetro que a plataforma reivindica"*. Só que deixar de
+      # declará-la não devolve a decisão à plataforma — devolve a uma **heurística
+      # de detecção**. A doc do Render diz, com o advérbio no original: *"if you
+      # bind your HTTP server to a different port, Render is **usually** able to
+      # detect and use it"*.
+      #
+      # Medido em produção: o default do Render é `PORT=10000`, o `EXPOSE` do
+      # nosso Dockerfile dizia `8000`, e o serviço passou a responder
+      # `x-render-routing: no-server` em **48% das requisições** — o roteador sem
+      # rota registrada, enquanto a aplicação, nos logs dela, respondia 200 a
+      # tudo que chegava. O log do deploy mostra o `==> Detected service running
+      # on port 10000` aparecendo **centenas de requisições depois** do serviço
+      # já estar de pé: a detecção estava acontecendo, e demorando.
+      #
+      # ✅ Com `PORT: 8000`, `EXPOSE`, `CMD` e plataforma passam a declarar o
+      # MESMO número, e não há mais nada a detectar. 🔑 *O `EXPOSE` de um
+      # Dockerfile é documentação — e documentação que discorda do processo é uma
+      # afirmação que alguém vai ler.* É a mesma família do campo `versoes` do
+      # `/health`, que dizia o Python do treino numa rota sobre o serviço: nada
+      # estava "errado", o rótulo é que respondia a outra pergunta.
+      #
+      # ⚠️ Honestidade sobre o mecanismo: a doc **não** confirma que o Render lê o
+      # `EXPOSE` para decidir a porta, então a hipótese não está provada. Mas a
+      # correção não depende dela — declarar a porta nos dois lados remove a
+      # ambiguidade que qualquer heurística teria de resolver, seja qual for.
+      - key: PORT
+        value: 8000
       #
       # E nenhum SEGREDO entra aqui: este arquivo é versionado. Segredo vai pelo
       # painel, e a regra que o acompanha é a do boot barulhento — configuração
