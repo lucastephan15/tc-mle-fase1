@@ -1,0 +1,68 @@
+# Deploy da API de churn — Etapa 9f-quater.
+#
+# 🔑 **Infraestrutura como código, não como memória de quem clicou.** Tudo aqui
+# poderia ser configurado apontando e clicando no painel; a diferença é que um
+# painel não entra no `git log`, não é revisável e não responde *"por que o
+# serviço está assim?"* seis meses depois. É o mesmo argumento do `Makefile`
+# contra "os comandos que eu sei de cabeça".
+#
+# Como usar: no painel do Render, **New > Blueprint**, apontando para este repo.
+# O Render lê este arquivo e cria o serviço já configurado.
+#
+# ⚠️ Os campos foram conferidos contra a documentação vigente (18/08/2026), não
+# escritos de memória — e o principal deles **mudou de nome**: não existe mais
+# `autoDeploy: true|false`, e sim `autoDeployTrigger`. Copiar um exemplo antigo
+# aqui produziria um YAML que o Render aceita ignorando o campo, que é o pior
+# resultado possível: a configuração que você acha que fez, e não fez.
+
+services:
+  - name: tc-churn-api
+    type: web
+    runtime: docker          # NÃO `env: docker` — o campo foi renomeado, e o
+                             # Render não permite alterá-lo depois da criação.
+    plan: free               # 512 MB de RAM e 0,1 CPU (números oficiais).
+                             # O container mede 171,2 MiB de RSS com 1 worker =
+                             # 33% do teto. Os `-w 4` que todo tutorial manda
+                             # dariam ~685 MB = 134% ⇒ OOM kill. E com 0,1 CPU
+                             # os 4 workers competiriam por um décimo de núcleo
+                             # ENQUANTO quadruplicam a memória: pior nas duas
+                             # pontas. O nº de workers sai da RAM, não da vazão.
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+
+    # O Render constrói a imagem a partir do CLONE DO GIT — não há máquina nossa
+    # no caminho e não há volume no plano gratuito. É por isso que
+    # `models/campeao.joblib` é exceção nomeada no `.gitignore`: sem ele
+    # versionado, a imagem subiria sem modelo.
+
+    healthCheckPath: /health
+    # Prontidão, não vitalidade: a rota declara versão, sha256 do artefato,
+    # nº de features e limiar. Um 200 que não diz QUAL modelo está carregado é
+    # o oitavo servidor da Knight Capital.
+
+    # 🚨 O elo que fechava o CI/CD, e que custou uma linha em vez de um webhook.
+    #
+    # O default do Render é `commit`: redeploy a cada push, o que publica o que
+    # o `make ci` ainda não aprovou — entrega contínua SEM integração contínua.
+    # `checksPass` faz o Render esperar os checks do GitHub Actions e só
+    # implantar se TODOS passarem (ele considera `success`, `neutral` e
+    # `skipped` como aprovados).
+    #
+    # ⚠️ Consequência a conhecer: o Render **não implanta** se o commit não tiver
+    # check nenhum. Aqui isso não ocorre porque `.github/workflows/ci.yml`
+    # dispara em todo push na `main` — mas se um dia o CI passar a ignorar
+    # caminhos (`paths:`), commits fora deles deixariam de implantar em silêncio.
+    autoDeployTrigger: checksPass
+
+    envVars:
+      # A porta NÃO é declarada: o Render injeta `PORT` e o `CMD` do Dockerfile
+      # já a lê (`${PORT:-8000}`). Fixar a porta seria assumir o controle de um
+      # parâmetro que a plataforma reivindica.
+      #
+      # E nenhum SEGREDO entra aqui: este arquivo é versionado. Segredo vai pelo
+      # painel, e a regra que o acompanha é a do boot barulhento — configuração
+      # ausente derruba o processo na inicialização, nunca vira default
+      # silencioso. É o que `criar_app()` já faz com o artefato.
+      - key: TC_ARTEFATO
+        value: /app/models/campeao.joblib
