@@ -1781,6 +1781,143 @@ ou mais".
 
 ---
 
+## 5f. Etapa 10 — monitoramento e manutenção
+
+### 10a · O log estruturado de inferência (18/08/2026)
+
+O `request_id` existia desde a 9d, era gerado no servidor, devolvido no header e
+**não era escrito em lugar nenhum**: `grep -rn "logging\|logger" src/` dava zero. Ele
+correlacionava a resposta com um log que não existia. Este bloco cria o log.
+
+**Uma linha JSON por requisição, em stdout, com 7 campos.** Os 6 canônicos
+(`timestamp`, `request_id`, `metodo`+`rota`, `status_code`, `latency_ms`) mais o
+**`artefato_sha256`**. O sétimo não é redundante com o que a resposta já devolve: a
+resposta é efêmera e o log é o rastro de auditoria. Quando o PSI cruzar o limiar daqui
+a três semanas, a primeira hipótese a descartar é *"trocaram o modelo no meio da
+janela"* — e sem o hash na linha ela não é descartável.
+
+#### 🚨 A decisão de máscara LGPD, e por que ela não é "tudo ou nada"
+
+A regra da casa é decidir a máscara **antes** de ligar o log, por assimetria: aumentar
+o que se loga é uma linha de configuração; desfazer o que já foi emitido não é operação
+nenhuma. **Log emitido não volta.**
+
+O que torna esta decisão diferente das anteriores é que é a **terceira camada** do
+mesmo problema, e a única sem solução por exclusão:
+
+| camada | protegida por | o que a regra faz |
+|---|---|---|
+| repositório | `.gitignore` (`logs/*.jsonl`, motivo LGPD escrito) | exclui |
+| imagem | `.dockerignore` (allowlist, 9f) | exclui |
+| **stdout do container** | 🚨 **nada** | — |
+
+Em container se loga em stdout (o filesystem é efêmero) e, no Render, **stdout é
+coletado pela plataforma** — um terceiro, cuja retenção não é nossa. Não há regra de
+exclusão possível, porque logar é a finalidade do arquivo. *Onde não se pode excluir,
+decide-se o que se escreve.*
+
+E o conflito é **interno à Etapa 10**: o `request_payload` é o insumo do data drift
+**e** é o dado pessoal — pior aqui do que no caso genérico, porque a Etapa 5 manteve
+`Gender`, `Senior Citizen`, `Partner` e `Dependents` nas features **de propósito**,
+para que a auditoria de fairness da 10.5 possa medir o viés em vez de ficar cega a ele.
+*A decisão certa numa etapa cobra o preço em outra.*
+
+✅ **A saída: as duas famílias de drift têm custos de privacidade opostos, então são
+tratadas separadamente.**
+
+| | precisa de | é dado pessoal? | quando |
+|---|---|---|---|
+| **prediction drift** (`P(ŷ)`) | as probabilidades de saída | **não** — número sem atributo ao lado não identifica ninguém | **sempre**, inclusive em produção |
+| **data drift** (`P(X)`) | as 13 features | **sim** | só com `TC_LOG_FEATURES=1` |
+
+⇒ A vigilância que roda **de graça e sem exposição** fica ligada na nuvem; a que custa
+privacidade é ligada por quem roda, na prática localmente para o `simulate_drift.py`.
+Prediction drift é sintoma e não causa — mas é sintoma de graça.
+
+⚠️ **E este `getenv` com default é legítimo onde o do item 100 não era.** Lá o default
+transformava "esqueci de configurar" em "configurei com o valor público": a ausência da
+variável levava ao estado **inseguro**, e o código funcionava. Aqui a ausência leva ao
+estado **conservador**. A regra não é *"nunca use default"* — é ***o default tem de ser
+a direção segura***.
+
+#### 🚨 O achado que mudou o código: o handler de `Exception` roda POR FORA do middleware
+
+Medido em 18/08/2026, com um app mínimo:
+
+```
+middleware viu: [('RESPOSTA', 200), ('EXCECAO', 'ValueError')]
+```
+
+No Starlette, um handler registrado para `Exception` vive no `ServerErrorMiddleware`,
+que é o **mais externo de todos**. Logo o nosso middleware **nunca vê a resposta 500** —
+vê a exceção crua subindo. Um log escrito a partir de `resposta.status_code` perderia
+**toda falha interna**, que é justamente o evento que o log existe para registrar, e o
+painel de taxa de erro mostraria zero para sempre.
+
+✅ Correção: `status = 500` como valor inicial + `finally`. O 200, o 422 e o 500 saem
+com uma linha cada. É a regra *"instrumentação que só mede o caminho feliz mede o que
+não precisa de medição"*, agora com o mecanismo específico do framework medido.
+
+#### 🚨 O defeito que só o teste encontrou — e ele quase passou despercebido
+
+O `logging.StreamHandler` da biblioteca padrão **congela o objeto de stream na
+construção**. Como `configurar()` roda dentro de `criar_app()`, o handler ficava preso
+ao `sys.stdout` daquele instante. Sob o pytest, isso significou que a linha saía num
+descritor que **nem `capsys` nem `capfd` liam**.
+
+🔑 **O que salva aqui é a forma do teste, não a esperteza:** os testes *parseiam* a
+linha e comparam conteúdo. Um teste escrito como *"a requisição respondeu 200, logo
+logou"* teria ficado **verde sem nunca ter visto uma linha** — e a Etapa 10 inteira
+seria construída sobre um log que ninguém verificou.
+✅ Correção: um handler que resolve `sys.stdout` **na hora de emitir**. É a família de
+*"alguém guardou uma referência e o recurso mudou por baixo"*, e a saída é a mesma de
+sempre: não guardar, perguntar toda vez.
+
+#### `--no-access-log` no `CMD` — e o número que o justifica
+
+O uvicorn tem log de acesso próprio, em texto puro. Medido, 3 requisições ao `/health`:
+
+| | linhas JSON | linhas de texto |
+|---|---|---|
+| sem a flag | 3 | 3 (+ banner) |
+| **com a flag** | **3** | **0** (só o banner de startup) |
+
+Duas linhas por requisição, uma delas não-JSON — o parser da Etapa 10 quebraria na
+primeira. ⚠️ Não é duplicação dentro da hierarquia do `logging` (isso o
+`propagate=False` já resolve): **é outro emissor**, e por isso o antídoto é outro.
+Nada se perde: a linha JSON tem método, rota, status e latência — tudo o que o access
+log tinha — mais o `request_id` e o `sha256`, que ele não tinha.
+
+#### Verificação (a disciplina de sempre: reprovando)
+
+9 testes novos (88 → **97**). Três sabotagens, cada uma derrubando exatamente o teste
+que devia:
+
+| sabotagem | teste que caiu |
+|---|---|
+| prefixo no `Formatter` (a linha deixa de ser JSON) | os 9, com `json.decoder.JSONDecodeError` |
+| `LOGAR_FEATURES = True` (a máscara cai) | `test_o_dado_pessoal_NAO_vai_no_log_por_default` |
+| `status` inicial 200 (o 500 some do log) | `test_500_tambem_e_logado` — `assert 200 == 500` |
+
+E a verificação no servidor real, que os testes não fazem: `GET /health` 200, `/v1/predict`
+200 e `/v1/predict` 422 produziram **exatamente 3 linhas JSON e nenhuma linha de texto**
+além do banner de startup.
+
+#### O que fica declarado como limitação
+
+- **`rota` usa o template**, não a URL. Hoje coincidem (nenhuma rota tem path param) —
+  o teste existe para o dia em que uma delas ganhar `/{id}` e a cardinalidade explodir
+  sem ninguém perceber.
+- **Sem rotação nem retenção do `.jsonl`.** Em produção quem retém é a plataforma, com
+  a política dela; localmente o arquivo está no `.gitignore` desde sempre, com o motivo
+  LGPD escrito. Uma política de retenção própria é fora do escopo desta entrega, e é
+  exatamente o que a opção (a) da máscara exigiria se o payload fosse logado por default.
+- **`scores` são arredondados em 6 casas.** É muito mais resolução do que o PSI usa (ele
+  bina em ~10 faixas) e descarta de propósito o ruído de última casa já medido entre
+  plataformas (40% das linhas diferem em até 4 ulps, com **zero** decisões trocadas).
+  Guardar essas casas convidaria alguém a comparar predições por igualdade exata — que é
+  precisamente o que aquela medição proibiu.
+
 ## 6. Decisão do modelo final
 
 *(preenchida ao fim da Etapa 8 — a fase de modelagem está fechada; o teste segue intocado até a

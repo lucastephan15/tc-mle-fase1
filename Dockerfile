@@ -134,7 +134,15 @@ sys.exit(0 if json.load(r).get('status') == 'pronto' else 1)"
 #
 # `${PORT:-8000}` porque um PaaS reivindica esse parâmetro; `exec` para o uvicorn
 # virar PID 1 e receber o SIGTERM do `docker stop` em vez de o shell o engolir.
-CMD ["sh", "-c", "exec uvicorn src.api.app:criar_app --factory --host 0.0.0.0 --port ${PORT:-8000} --workers 1"]
+# 🚨 `--no-access-log` é da Etapa 10, e sem ele o log estruturado não serve.
+# O uvicorn tem log de acesso PRÓPRIO, em texto puro, e o nosso middleware emite
+# uma linha JSON — os dois em stdout dão **duas linhas por requisição, uma
+# delas não-JSON**, e o parser do monitoramento quebra na primeira. Não é
+# duplicação dentro da hierarquia do `logging` (isso o `propagate=False` já
+# resolve): é outro emissor. Nada se perde ao desligá-lo — a linha JSON tem
+# método, rota, status e latência, que é tudo o que o access log tinha, mais o
+# `request_id` e o sha256 do artefato, que ele não tinha.
+CMD ["sh", "-c", "exec uvicorn src.api.app:criar_app --factory --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --no-access-log"]
 
 # --- PLATAFORMA ------------------------------------------------------------
 #

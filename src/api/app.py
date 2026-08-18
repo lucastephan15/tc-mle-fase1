@@ -36,6 +36,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from src import artefato as art_mod
+from src.api import observabilidade as obs
 from src.api import schema, servico
 
 TITULO = "API de churn — Tech Challenge Fase 1"
@@ -63,6 +64,7 @@ def criar_app(artefato: art_mod.Artefato | None = None) -> FastAPI:
     """
     artefato = artefato or art_mod.carregar()
     pontuador = servico.PontuadorArtefato(artefato)
+    logger = obs.configurar()
 
     Cliente = schema.construir_modelo_entrada(artefato.pipeline)
     Lote = schema.construir_modelo_lote(Cliente)
@@ -90,21 +92,52 @@ def criar_app(artefato: art_mod.Artefato | None = None) -> FastAPI:
     #  exatamente o mecanismo que o RUF100 existe para explorar.)
     Servico = Annotated[servico.Pontuador, Depends(obter_pontuador)]
 
-    # --- Middleware: request_id + cronometragem ----------------------------
+    # --- Middleware: request_id + cronometragem + log ----------------------
     #
     # O `request_id` é gerado NO SERVIDOR e é o que substitui o eco do payload:
     # a resposta correlaciona com o log sem devolver dado pessoal que o cliente
     # já tem. `try/finally` porque instrumentação que só mede o caminho feliz
     # mede o que não precisa de medição — o 422 e o 500 também são cronometrados,
     # e sem isso o P95 fica cego justamente para o que falha rápido.
+    #
+    # 🚨 **`status` começa em 500, e isso não é pessimismo — é o que a medição
+    # obriga.** Verificado em 18/08/2026: o handler de `Exception` registrado
+    # abaixo roda por **FORA** desta função (no Starlette ele vive no
+    # `ServerErrorMiddleware`, que é o mais externo de todos). Ou seja, quando
+    # uma rota levanta, este middleware **não vê a resposta 500** — ele vê a
+    # exceção crua subindo. Se a linha de log fosse escrita a partir de
+    # `resposta.status_code`, toda falha interna sumiria do log, e o log ficaria
+    # cego exatamente para o evento que ele existe para registrar.
+    #   middleware viu: [('RESPOSTA', 200), ('EXCECAO', 'ValueError')]
+    # O default 500 + `finally` fecham os dois caminhos com uma linha cada.
     @app.middleware("http")
-    async def identificar_e_cronometrar(request: Request, call_next):
+    async def identificar_cronometrar_e_logar(request: Request, call_next):
         request.state.request_id = str(uuid.uuid4())
+        status = 500
         inicio = perf_counter()
         try:
             resposta = await call_next(request)
+            status = resposta.status_code
         finally:
             ms = (perf_counter() - inicio) * 1000
+            obs.registrar(
+                logger,
+                request_id=request.state.request_id,
+                metodo=request.method,
+                # A ROTA TEMPLATE, não a URL: `request.url.path` viraria uma
+                # série nova a cada path param, e é a mesma explosão de
+                # cardinalidade que se evita em label de métrica. Aqui as rotas
+                # são fixas, então os dois coincidem — mas o dia em que uma rota
+                # ganhar `/{id}` é o dia em que ninguém vai lembrar de voltar
+                # aqui.
+                rota=getattr(request.scope.get("route"), "path", request.url.path),
+                status_code=status,
+                latency_ms=ms,
+                artefato_sha256=pontuador.sha256,
+                n_linhas=getattr(request.state, "n_linhas", None),
+                scores=getattr(request.state, "scores", None),
+                features=getattr(request.state, "features", None),
+            )
         resposta.headers["X-Request-ID"] = request.state.request_id
         resposta.headers["X-Response-Time-ms"] = f"{ms:.3f}"
         return resposta
@@ -221,6 +254,23 @@ def _responder(request: Request, p: servico.Pontuador, clientes: list):
     linhas = [c.model_dump(by_alias=True) for c in clientes]
     scores = p.pontuar(linhas)
     limiar = p.limiar
+
+    # O que o log vai escrever é depositado aqui e emitido LÁ, no middleware.
+    # Duas razões para não logar direto desta função: (a) uma linha por
+    # requisição exige um único emissor, senão o 422 (que nunca chega aqui) sai
+    # com formato diferente do 200; (b) a latência só é conhecida no middleware.
+    #
+    # 🚨 `features` só é depositado com `TC_LOG_FEATURES=1` — a decisão de máscara
+    # LGPD mora em UM lugar, e é `observabilidade.LOGAR_FEATURES`. `scores` vai
+    # sempre: probabilidade sem atributo ao lado não identifica ninguém, e é o
+    # que dá **prediction drift de graça** em produção. As features dariam data
+    # drift, e custam `Gender`/`Senior Citizen`/`Partner`/`Dependents` no stream
+    # de log de um terceiro.
+    request.state.n_linhas = len(linhas)
+    request.state.scores = scores
+    if obs.LOGAR_FEATURES:
+        request.state.features = linhas
+
     return schema.PredicaoResponse(
         request_id=getattr(request.state, "request_id", "-"),
         versao_modelo=p.versao,
