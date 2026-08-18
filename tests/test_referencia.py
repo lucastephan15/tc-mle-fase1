@@ -225,3 +225,99 @@ def test_o_artefato_promovido_expoe_a_referencia(art):
     assert ref["particao"] == "treino"
     assert ref["n"] > 0
     assert set(ref["numericas"]) | set(ref["categoricas"]) == set(art.features)
+
+
+# --- Prediction drift: o baseline da metade que SEMPRE é coletada -----------
+
+
+def test_baseline_de_scores_sai_da_validacao_e_conhece_a_fila(art, dados):
+    """O bloco `scores` existe, é out-of-sample e traduz o limiar em fila.
+
+    A `taxa_acima_do_limiar` é o número que dispensa analista: PSI 0,3 pede
+    interpretação, "a fila de retenção dobrou" já é a decisão.
+    """
+    ref = art.referencia["scores"]
+    assert ref["particao"] == "validacao"
+    assert ref["n"] == len(dados.validacao.y)
+    assert ref["limiar"] == pytest.approx(art.limiar)
+    assert 0.0 < ref["taxa_acima_do_limiar"] < 1.0
+
+
+def test_controles_do_prediction_drift(art, dados):
+    """Negativo: a própria validação não acusa. Positivo: a janela deslocada sim.
+
+    O deslocamento aqui é o que aconteceria com o modelo **inalterado** e a
+    população mudando — a saída se desloca sem que uma linha de código mude, que
+    é exatamente o evento contra o qual o log de scores existe.
+    """
+    scores = art.pipeline.predict_proba(dados.validacao.X)[:, 1]
+
+    igual = referencia.comparar_scores(art.referencia, list(scores))
+    assert igual["psi"] == 0.0
+    assert igual["fila_x"] == pytest.approx(1.0)
+
+    saida = referencia.comparar_scores(art.referencia, list(np.clip(scores * 2.0, 0, 1)))
+    assert saida["classificacao"] == "agir", saida
+    assert saida["media_janela"] > saida["media_ref"]
+
+
+def test_a_fila_enxerga_antes_do_psi(art, dados):
+    """🔑 Achado da execução (18/08/2026): o PSI de scores é **pouco sensível** a
+    deslocamento monotônico, e a taxa acima do limiar não é.
+
+    Medido, dobrando o risco de toda a carteira por um fator: ×1,2 → PSI 0,068
+    (*estável*) com a fila já 12% maior; ×1,4 → PSI 0,151 (*investigar*) com a
+    fila 25% maior; ×1,6 → PSI 0,224, **ainda** *investigar*, com a fila 32%
+    maior. Só em ×2,0 o PSI cruza 0,25.
+
+    O motivo é estrutural, não um defeito da implementação: os bins são
+    **decis**, e transformação monotônica move pouca massa entre decis — quase
+    todo mundo continua no mesmo lugar da fila, mesmo com todos os números
+    subindo. É a versão de prediction drift do aviso do 10c ("nem todo drift
+    significa que o modelo piorou"), no sentido inverso: **nem toda mudança que
+    importa aparece no PSI**.
+
+    Consequência para a Etapa 10: o painel não pode ter só PSI. A taxa acima do
+    limiar mede o que a operação sente (quantas pessoas a campanha vai ligar), e
+    ela dispara antes — com a vantagem de já vir na unidade da decisão.
+    """
+    scores = art.pipeline.predict_proba(dados.validacao.X)[:, 1]
+    r = referencia.comparar_scores(art.referencia, list(np.clip(scores * 1.6, 0, 1)))
+
+    assert r["classificacao"] == "investigar", r
+    assert r["psi"] < referencia.PSI_AGIR
+    assert r["fila_x"] > 1.3, (
+        "a fila cresceu mais de 30% e o PSI ainda não pediu ação — é o ponto "
+        "do teste, e se um dia ele falhar é porque a régua mudou"
+    )
+
+
+def test_janela_vazia_nao_vira_psi_zero(art):
+    """Nenhuma requisição na janela é "sem dados", não "estável".
+
+    A distinção importa porque as duas rendem o mesmo silêncio no painel, e uma
+    delas é a **queda de volume** — sintoma clássico de falha upstream, que a
+    Etapa 10b lista como família própria: "sem erro" ≠ "tudo bem".
+    """
+    saida = referencia.comparar_scores(art.referencia, [])
+    assert saida["classificacao"] == "sem-dados"
+    assert saida["psi"] is None
+
+
+def test_carga_estrita_recusa_artefato_sem_baseline_de_scores(promovido, tmp_path):
+    """Baseline pela metade: features congeladas, saída não.
+
+    O modo de falha é assimétrico e por isso enganoso — o artefato teria
+    baseline para a vigilância que quase nunca roda (features exigem
+    `TC_LOG_FEATURES=1`) e nenhum para a que roda sempre.
+    """
+    import joblib
+
+    _, caminho = promovido
+    payload = joblib.load(caminho)
+    del payload["metadados"]["referencia"]["scores"]
+    forjado = tmp_path / "sem_scores.joblib"
+    joblib.dump(payload, forjado)
+
+    with pytest.raises(artefato.ArtefatoIncompativel, match="baseline de scores"):
+        artefato.carregar(forjado)

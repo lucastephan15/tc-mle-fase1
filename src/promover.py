@@ -37,7 +37,7 @@ from src.train import commit_hash
 
 
 def montar_metadados(dados: data.Dados, metricas: dict, custo: dict,
-                     features: list[str]) -> dict:
+                     features: list[str], *, scores_validacao) -> dict:
     """Tudo que a API precisa declarar sobre o que está servindo.
 
     As features saem do PIPELINE (`feature_names_in_`), não de `config.FEATURES`:
@@ -77,6 +77,8 @@ def montar_metadados(dados: data.Dados, metricas: dict, custo: dict,
         # só um gráfico comparando nada.
         "referencia": referencia.calcular(
             dados.treino.X, config.NUM_ZERO + config.NUM, config.CAT,
+            scores=scores_validacao,
+            limiar=float(custo["limiar_otimo"]),
         ),
     }
 
@@ -106,14 +108,18 @@ def main() -> int:
               "é promoção, é sobrescrita.")
         return 1
 
+    # As probabilidades da VALIDAÇÃO servem a dois propósitos aqui, e é o mesmo
+    # array: baseline de prediction drift (10a-2) e lado "memória" do round-trip.
+    p_memoria = pipe.predict_proba(dados.validacao.X)[:, 1]
+
     metadados = montar_metadados(
         dados, metricas, custo, features=list(pipe.feature_names_in_),
+        scores_validacao=p_memoria,
     )
     sha = artefato.salvar(pipe, metadados)
 
     # Round-trip: o que está no DISCO prediz igual ao que está em memória?
     recarregado = artefato.carregar()
-    p_memoria = pipe.predict_proba(dados.validacao.X)[:, 1]
     p_disco = recarregado.pipeline.predict_proba(dados.validacao.X)[:, 1]
     if not np.array_equal(p_memoria, p_disco):
         maior = float(np.abs(p_memoria - p_disco).max())
@@ -139,6 +145,10 @@ def main() -> int:
           f"{len(p_disco)} predições: idêntico")
     print(f"   baseline de drift: {len(ref['numericas'])} numéricas + "
           f"{len(ref['categoricas'])} categóricas sobre n={ref['n']} do treino")
+    print(f"   baseline de scores: n={ref['scores']['n']} da validação · "
+          f"média {ref['scores']['media']:.4f} · "
+          f"{ref['scores']['taxa_acima_do_limiar']:.1%} acima do limiar "
+          f"(o tamanho da fila de retenção)")
     print("\n" + artefato.descrever(recarregado))
     return 0
 

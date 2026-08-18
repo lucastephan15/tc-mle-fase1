@@ -224,6 +224,15 @@ def carregar(caminho: Path = config.ARTEFATO, estrito: bool = True) -> Artefato:
                 f"Rode `make promover` — sem baseline não existe drift para "
                 f"detectar, só um gráfico comparando nada."
             )
+        if not ref.get("scores"):
+            raise ArtefatoIncompativel(
+                f"{caminho} tem baseline de features e NÃO tem baseline de "
+                f"scores ('referencia.scores'). É a metade que mais importa: as "
+                f"features só entram no log com TC_LOG_FEATURES=1, as "
+                f"probabilidades vão em toda linha — sem este bloco, a única "
+                f"vigilância que roda sempre em produção é a que fica sem "
+                f"denominador. Rode `make promover`."
+            )
         if esperadas and cobertas != set(esperadas):
             faltam = sorted(set(esperadas) - cobertas)
             sobram = sorted(cobertas - set(esperadas))
@@ -256,6 +265,11 @@ def descrever(a: Artefato) -> str:
         f"numéricas + {len(m.get('referencia', {}).get('categoricas', {}))} "
         f"categóricas · n={m.get('referencia', {}).get('n')} "
         f"({m.get('referencia', {}).get('particao')})",
+        f"scores (ref)    : n={m.get('referencia', {}).get('scores', {}).get('n')} "
+        f"da validação · média "
+        f"{m.get('referencia', {}).get('scores', {}).get('media')} · "
+        f"{m.get('referencia', {}).get('scores', {}).get('taxa_acima_do_limiar')} "
+        f"acima do limiar",
         f"promovido_em    : {m.get('promovido_em')}",
         f"commit          : {m.get('commit')}",
         f"dataset_sha256  : {str(m.get('dataset_sha256'))[:16]}…",

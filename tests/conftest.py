@@ -48,6 +48,7 @@ def promovido(dados, tmp_path_factory) -> tuple[Pipeline, object]:
         pipe,
         promover.montar_metadados(
             dados, metricas, custo, features=list(pipe.feature_names_in_),
+            scores_validacao=pipe.predict_proba(dados.validacao.X)[:, 1],
         ),
         caminho=caminho,
     )

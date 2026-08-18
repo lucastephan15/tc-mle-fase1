@@ -1918,6 +1918,230 @@ além do banner de startup.
   Guardar essas casas convidaria alguém a comparar predições por igualdade exata — que é
   precisamente o que aquela medição proibiu.
 
+### 10a-2 · As estatísticas de referência do treino (18/08/2026)
+
+> *Sem baseline não existe drift para detectar, só um gráfico comparando nada.*
+
+**A decisão pendente era de formato** (item 109 do revisita, aberto no ato e fechado no dia
+seguinte): as estatísticas moram **dentro dos metadados do artefato** ou num
+`models/referencia.json` ao lado?
+
+**Escolhido: dentro do artefato.** O argumento é o mesmo que já decidiu o limiar de operação na
+9c — a distribuição de referência é propriedade **daquele modelo**, não do repositório: ela muda
+quando o modelo muda. A alternativa criaria exatamente o par que a regra nº 1 do empacotamento
+existe para proibir ("dois arquivos que podem não combinar"), e nesta variante a falha é pior que
+rótulo errado, porque **não falha**: baseline de um modelo comparado com predições de outro mede
+drift fantasma, ou deixa de ver o real. Ninguém recebe erro.
+
+🔑 **O argumento que fechou a decisão só apareceu ao escrever o código: o baseline é
+auto-suficiente.** Ele guarda as **proporções esperadas por bin**, não os dados. Quem calcula PSI
+em produção não precisa do dataset de treino — que é justamente o que **não pode** estar lá
+(`data/raw` é LGPD e o `.dockerignore` o barra). Uma referência que exigisse reler o Excel seria
+uma referência que não roda onde o drift acontece.
+
+#### A verificação antes de escolher — e o risco que ela inverteu
+
+O item 109 mandava checar se `carregar(estrito=True)` valida o conjunto de chaves dos metadados,
+porque acrescentar uma chave nova poderia **recusar artefatos antigos**. Medido: **não valida** —
+todos os acessos usam `metadados.get(...)`. Ou seja, o risco previsto não existia, e o risco real
+era o oposto: um artefato sem baseline **carregaria em silêncio**, subiria, responderia 200, e a
+falha só apareceria semanas depois como **ausência de alerta** — que é indistinguível de ausência
+de problema.
+
+⇒ A carga ganhou a **quarta checagem**: exige a `referencia` e exige que ela **cubra as features
+declaradas**. Baseline de 13 colunas para um modelo de 12 mede drift de uma coluna que o modelo
+não usa mais, e não mede o da que entrou.
+
+#### O furo encontrado no meio da execução: `P(X)` congelado, `P(ŷ)` não
+
+A primeira versão congelou só a distribuição de **entrada**. O erro aparece quando se cruza com a
+decisão de máscara da 10a:
+
+| | vai para o log | tem baseline (1ª versão) |
+|---|---|---|
+| `features` (data drift) | **só com `TC_LOG_FEATURES=1`** | ✅ |
+| `scores` (prediction drift) | **em toda linha, sempre** | ❌ |
+
+Isto é, o baseline existia para a metade que quase nunca é coletada e faltava para a que **sempre**
+é. Corrigido: a referência passou a ter um bloco `scores`.
+
+**As duas metades vêm de partições diferentes, de propósito.** `X` sai do **treino**; os `scores`
+saem da **validação** — in-sample o modelo é otimista por construção, e um baseline otimista faria
+produção parecer deslocada para sempre (drift fantasma permanente, que treina o time a ignorar o
+alerta). ⚠️ Medido neste campeão: PSI treino × validação nos scores = **0,0022**, ou seja, a
+escolha custaria quase nada aqui — LogReg regularizada com 13 features mal overfitta. A decisão é
+por princípio e a medição diz que ela é **barata**, não dispensável: com um HGB profundo no lugar,
+o mesmo erro não sairia de graça.
+
+#### O que foi congelado
+
+- **3 numéricas:** média, desvio, min/max, 7 quantis, **bordas de bin** (decis) e proporções.
+- **10 categóricas:** frequências relativas, ordenadas por nome (ordem que depende do dado faz o
+  mesmo baseline produzir bytes diferentes conforme empates).
+- **scores:** quantis, bordas, proporções, o limiar e a **taxa acima do limiar**.
+
+🔑 **As bordas dos bins viajam junto, e isso não é detalhe.** PSI com bins recalculados na janela
+de produção compara duas escalas diferentes: o número deixa de significar o que a regra de bolso
+(`<0,10` estável · `0,10–0,25` investigar · `>0,25` agir) diz que significa. Congelar as bordas é o
+que torna a série comparável ao longo do tempo.
+
+🔑 **A `taxa_acima_do_limiar` é o número que dispensa analista.** "PSI 0,30" exige interpretação;
+"a fila de retenção encolheu 37%" já é a conversa. Métrica de monitoramento que só existe em
+unidade estatística é métrica em que ninguém age.
+
+#### Controles (a disciplina de sempre: verificar nos dois sentidos)
+
+| controle | esperado | medido |
+|---|---|---|
+| treino × treino | 0 | **0,0000** |
+| validação × treino (ruído de partição) | « 0,10 | **0,0128** (pior coluna) |
+| `Tenure Months` +12 | agir | **3,55** — demais colunas quietas |
+| `Monthly Charges` ×1,15 | agir | **1,46** |
+| categoria inédita em ⅓ da janela | agir | **4,37**, com a categoria **nomeada** |
+| scores da própria validação | 0 | **0,0000**, fila 1,00× |
+
+**4 sabotagens verificadas reprovando:** bins fechados nas pontas, bordas sem deduplicação, PSI sem
+o termo logarítmico, e a quarta checagem desligada.
+
+⚠️ **Uma proteção que o dado real não exercita.** Remover o `np.unique` das bordas **não quebrava
+nenhum teste**: as 3 numéricas do repo têm 9 decis distintos cada. O teste que a cobre passou a ser
+**sintético e explícito** (coluna com 70% de zeros) — proteção que o dataset não exercita é
+proteção que ninguém verifica.
+
+#### 🎯 Achado: o PSI de scores é pouco sensível, e a fila não é
+
+Dobrando o risco de toda a carteira por um fator:
+
+| fator | PSI dos scores | veredito | fila de retenção |
+|---|---|---|---|
+| ×1,2 | 0,068 | estável | +12% |
+| ×1,4 | 0,151 | investigar | +25% |
+| ×1,6 | 0,224 | **ainda** investigar | +32% |
+| ×2,0 | 0,386 | agir | +42% |
+
+O motivo é estrutural, não um defeito: os bins são **decis**, e transformação monotônica move pouca
+massa entre decis — quase todo mundo continua no mesmo lugar da fila, mesmo com todos os números
+subindo. É o aviso do 10c no sentido inverso: **nem toda mudança que importa aparece no PSI**.
+⇒ O painel não pode ter só PSI; a taxa acima do limiar dispara antes e já vem na unidade da decisão.
+
+#### Efeitos colaterais assumidos
+
+- **O artefato muda:** 8.306 → **10.398 B**, novo `sha256`. Como ele é versionado (exceção nomeada
+  da 9f) e o Render tem `autoDeployTrigger: checksPass`, promover **re-implanta o serviço**.
+  Verificado que o objeto servido é o mesmo: **PR-AUC `0.6646020518504109`**, idêntico nos 16
+  dígitos ao da 9e — só os metadados cresceram.
+- **O round-trip do `promover.py` passou a comparar os metadados também.** O anterior comparava só
+  as 1.409 probabilidades, e probabilidade não passa por `referencia`: ~2,5 KB que **nada** no
+  caminho feliz da API lê, e cujo erro só apareceria na primeira análise de drift.
+- **A fixture do `conftest.py` deixou de montar os metadados à mão** e passou a chamar
+  `promover.montar_metadados()`. Eram duas construções paralelas do mesmo objeto — e um teste que
+  reconstrói o objeto sob teste testa a reconstrução. Mesmo movimento do item 85, quando
+  `gate.medir()` foi extraída para que o CI e o teste de caracterização medissem **o mesmo objeto**:
+  o teste puxa o desenho.
+
+---
+
+### 10c-bis · Drift fabricado — provar que o detector dispara (18/08/2026)
+
+> **O problema é de calendário, não de estatística.** Drift real leva meses; um Tech Challenge de
+> seis semanas nunca vê um, e a Etapa 10 termina declarativa ("eu monitoraria…"). A inversão: em
+> vez de esperar, **fabricar** o drift e mostrar o alarme nascer. O que se testa **não é o
+> modelo** — é o sistema de vigilância.
+
+    make simular-drift          # ~20 s, três cenários
+
+O script sobe a própria API num subprocesso com o stdout redirecionado, manda uma janela **base**
+(400 clientes reais da validação) e a mesma janela **deslocada**, e separa as duas metades do log
+**pelo `request_id` que cada resposta devolveu** — que é exatamente para isso que ele existe:
+correlacionar resposta e log sem devolver dado pessoal ao cliente.
+
+#### Os três cenários e o que cada um respondeu
+
+| cenário | data drift | prediction drift | fila de retenção |
+|---|---|---|---|
+| **base envelhecendo** (`tenure` +12) | `Tenure Months` **3,59** (agir) | **0,30** (agir) | **0,63×** — encolhe |
+| **reajuste** (`Monthly Charges` ×1,15) | `Monthly Charges` **1,49** (agir) | **0,03** (estável) | 1,01× |
+| **plano novo** (categoria inédita) | — | — | **HTTP 422** |
+
+**🔑 As duas famílias se movem de forma independente, e os dois primeiros cenários provam isso em
+direções opostas.** No reajuste, a entrada muda muito e a saída quase nada — é o aviso do 10c em
+números (*nem todo data drift significa que o modelo piorou*), e um painel que alertasse por PSI de
+entrada teria acordado alguém de madrugada por nada.
+
+**🚨 E no envelhecimento o alerta chega vestido de boa notícia.** A saída se desloca (PSI 0,30) e a
+fila de retenção **encolhe 37%**, porque tenure alto significa menos churn. Um painel de negócio
+olhando só volume comemora — "a campanha vai ligar para menos gente"; um painel de drift pergunta
+por quê. É o caso que justifica manter as duas leituras lado a lado.
+
+#### 🎯 O achado que inverteu a premissa: categoria inédita não é drift silencioso aqui
+
+A expectativa — do enunciado e do catálogo de armadilhas — era que o `OneHotEncoder` tratasse a
+categoria desconhecida como tudo-zero e **predissesse mesmo assim, com HTTP 200**, com o
+monitoramento pegando dias depois via PSI. **Medido: a API devolve 422 e a linha nunca chega ao
+modelo.**
+
+O motivo é uma decisão da 9d: o schema é **derivado do artefato**
+(`Literal[tuple(ohe.categories_)]`), não escrito à mão como `str`. O contrato HTTP herdou as 25
+categorias que o encoder viu, então categoria inédita vira erro de **validação**, na borda.
+
+**Consequência para o desenho do monitoramento:** nesta API, categoria nova **não é evento de
+drift — é evento de serviço**. Aparece como pico de 4xx (10b, família "serviço"), não como PSI
+subindo, e aparece **na primeira requisição**, não ao fim de uma janela. Vigiar isso com PSI seria
+vigiar o lugar errado; um alerta de taxa de erro, que qualquer plataforma dá de graça, é o detector
+mais rápido para esta família.
+
+⚠️ **O preço está declarado:** o serviço **recusa** o cliente novo em vez de arriscar um palpite.
+É a escolha certa para um ranqueador de campanha (a fila fica menor e ninguém é pontuado errado) e
+seria a errada para um serviço obrigado a responder sempre — nesse caso o schema teria de aceitar a
+categoria, e o monitoramento é que assumiria a carga.
+
+#### Limitações — declaradas de propósito
+
+1. **É covariate shift** (`P(X)` mudou) e é detectável **por construção**, porque foi construído. O
+   script **não** simula concept drift (`P(y|X)`), que é invisível às estatísticas de entrada: o
+   objeto que mudou não existe sem `y`.
+2. **Detectar não é corrigir.** O alerta abre um caminho (investigar → decidir se retreina → passar
+   pelo gate), não fecha um. Pipeline que retreina sozinho ao ver PSI alto é uma máquina de pôr
+   modelo pior em produção mais rápido.
+3. **A régua é PSI, não p-valor** — com amostra grande KS acusa qualquer coisa. E KS é para
+   contínuas; categórica pede PSI ou qui-quadrado.
+4. 🔑 **O deslocamento é univariado, e o detector também.** Somar 12 meses a `Tenure Months` sem
+   mexer em `Total Charges` cria clientes com dois anos de casa e a fatura acumulada de um —
+   combinação que **não existe no mundo**. Medido: `Tenure Months` vai a 3,59 e `Total Charges`
+   fica em **0,034** (estável), apesar de metade da história daqueles clientes ter deixado de fazer
+   sentido. É a demonstração acidental do ponto do 10c: KS/PSI olham **uma coluna por vez** e são
+   cegos à combinação inédita. O upgrade natural, se sobrar tempo, é um `IsolationForest` sobre o
+   treino como indicador multivariado ao lado do PSI.
+5. ⚠️ **O script não roda contra a API em produção** — e não por falta de endereço. Lá o stdout
+   pertence à plataforma e não há como lê-lo de volta. É a terceira camada do "quem lê este
+   arquivo?" cobrando o preço na direção contrária: o log que é fácil de emitir é o mesmo que é
+   difícil de recuperar.
+
+#### O leitor de logs (`src/monitoring.py`)
+
+`make monitorar LOG=…` transforma o `.jsonl` nas famílias do 10b — latência em **percentis**
+(P50/P95/P99, porque a média mente), status e taxa de erro, prediction drift sempre e data drift
+quando as features estiverem no log.
+
+🚨 **A primeira coisa que ele faz não é estatística, é identidade.** Conta quantos
+`artefato_sha256` distintos há na janela e os confronta com o artefato cujo baseline está sendo
+usado — é o que torna aquele campo do log **verificável em vez de decorativo**: PSI alto tem duas
+explicações ("a população mudou" e "trocaram o modelo no meio da janela") e sem essa checagem a
+segunda é indistinguível da primeira.
+
+Três silêncios que o painel se recusa a produzir, cada um com teste próprio:
+
+- **features ausentes ⇒ "não medido"**, nunca "estável" — não medir e medir zero produzem o mesmo
+  silêncio, e só um deles é informação;
+- **janela sem predição ⇒ "sem dados"**, nunca PSI 0 — volume zero é sintoma próprio (falha
+  upstream), e "sem erro" ≠ "tudo bem";
+- **linhas não-JSON são contadas**, não descartadas — é o sintoma de que outro emissor entrou no
+  stream (o access log do servidor é o caso conhecido).
+
+**Qualidade preditiva fica de fora, e a ausência é a informação:** acurácia e PR-AUC exigem o
+rótulo, e o churn só se confirma ao fim do ciclo de faturamento. É a janela cega do ground truth —
+e a razão de o drift ser o que se vigia em tempo real.
+
 ## 6. Decisão do modelo final
 
 *(preenchida ao fim da Etapa 8 — a fase de modelagem está fechada; o teste segue intocado até a

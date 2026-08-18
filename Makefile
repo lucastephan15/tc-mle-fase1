@@ -5,6 +5,7 @@
 # na cabeça de quem escreveu, a reprodutibilidade é declarativa, não real.
 
 .PHONY: help setup exige-venv lint test ci gate promover artefato api \
+        monitorar simular-drift \
         docker-build docker-run docker-teste docker-limpar \
         eda baseline comparacao finalistas tuning mlp limpar
 
@@ -56,6 +57,26 @@ api: exige-venv  ## Sobe a API local em http://localhost:8000 (docs em /docs)
 	# (193,6 MB por worker, 93% import), não a vazão — a 1,7 ms por predição a
 	# vazão sobra desde o primeiro.
 	$(VENV)/bin/uvicorn src.api.app:criar_app --factory --host 127.0.0.1 --port 8000 --no-access-log
+
+# --- Monitoramento (Etapa 10) -----------------------------------------------
+
+LOG ?= logs/inferencia.jsonl
+
+monitorar: exige-venv ## Etapa 10 — lê um .jsonl de inferência e mostra o painel
+	# A API loga em STDOUT (filesystem de container é efêmero), então quem quer
+	# arquivo redireciona: `make api > $(LOG)`. O caminho é sobrescrevível com
+	# LOG=... — inclusive para os arquivos que o simulate_drift deixa em logs/.
+	$(PY) -m src.monitoring $(LOG)
+
+simular-drift: exige-venv ## Etapa 10c-bis — fabrica drift, prova que o detector dispara
+	# Sobe a própria API num subprocesso, manda uma janela normal e uma
+	# deslocada, e roda a detecção sobre os logs das duas. ~20 s.
+	#
+	# 🚨 Roda com TC_LOG_FEATURES=1 (o script liga sozinho), que produção mantém
+	# desligado: data drift precisa das 13 colunas de entrada, e 4 delas são
+	# demográficas. Aceitável aqui (máquina local, logs/ está no .gitignore) e
+	# não no PaaS, onde o stdout é coletado por um terceiro.
+	PYTHONPATH=. $(PY) scripts/simulate_drift.py
 
 # --- Container (Etapa 9f) ---------------------------------------------------
 

@@ -205,6 +205,36 @@ Três decisões que valem a leitura, todas em `.github/workflows/ci.yml` e no de
 
 ---
 
+### O monitoramento
+
+A API emite **uma linha JSON por requisição em stdout** (não em arquivo: o filesystem do container
+é efêmero, e num PaaS o que a plataforma coleta é o stream). Quem quer arquivo redireciona:
+
+```bash
+make api > logs/inferencia.jsonl        # a API, com o log indo para disco
+make monitorar                          # o painel: latência em percentis, erros, drift
+make simular-drift                      # ~20 s — fabrica drift e mostra o alarme nascer
+```
+
+**O que vai na linha, e o que não vai.** `scores` **sempre** (probabilidade sem atributo ao lado
+não identifica ninguém, e dá prediction drift de graça); as 13 features **só** com
+`TC_LOG_FEATURES=1`, porque quatro delas são demográficas e o stdout, num PaaS, é coletado por um
+terceiro. O default é a direção segura, e a decisão foi tomada **antes** da primeira linha ser
+emitida: log emitido não volta.
+
+**O baseline mora dentro do artefato** (média/desvio/quantis e bordas de PSI das numéricas,
+frequências das categóricas, distribuição dos scores). É propriedade daquele modelo, não do
+repositório — e como guarda proporções por bin em vez de dados, roda no container **sem o
+dataset**, que é justamente o que não pode estar lá.
+
+`make simular-drift` é o teste do sistema de vigilância: manda à API uma janela normal e uma
+deslocada de propósito (base envelhecendo, reajuste de preço, plano novo no catálogo) e mostra o
+antes/depois. O resultado mais instrutivo veio do terceiro cenário — **categoria inédita devolve
+422 e nunca chega ao modelo**, porque o schema é derivado do artefato. Nesta API, categoria nova é
+evento de **serviço**, não de drift. Detalhes e limitações em `docs/decision-log.md` §5f.
+
+---
+
 ## Status
 
 | Etapa | Estado |
@@ -220,6 +250,6 @@ Três decisões que valem a leitura, todas em `.github/workflows/ci.yml` e no de
 | 8 · MLP em PyTorch | ✅ concluída — §5d · **a rede não superou** (0,6615 × 0,6646), e a regra 1-SE elegeu profundidade **zero** |
 | 9 · Pipeline serializado + API | ✅ **concluída (9c → 9f-quater)** — §5e · artefato promovido com identidade verificada na carga, API FastAPI de pé (`/health` · `/v1/predict` · `/v1/predict-batch`) e **imagem `linux/amd64` servindo o mesmo modelo** (PR-AUC idêntico nos 10 dígitos entre macOS e Linux, 0 decisões trocadas). **No ar em https://tc-churn-api.onrender.com**, com o deploy versionado em `render.yaml` e travado atrás do CI |
 | 9.5 · CI/CD | 🟡 **parcial** — QA + gate de dois eixos rodando; falta o registro (depende da Etapa 9) |
-| 10 · Monitoramento | ⬜ |
+| 10 · Monitoramento | 🟡 **em curso** — §5f · log estruturado (10a), baseline de drift dentro do artefato (10a-2), leitor de logs e **drift fabricado com detector verificado** (10c-bis) |
 | 10.5 · Governança e fairness | ⬜ |
 | 11 · Documentação | ⬜ |

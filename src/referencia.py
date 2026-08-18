@@ -80,13 +80,33 @@ def _proporcoes(valores: np.ndarray, bordas: list[float]) -> list[float]:
 
 
 def calcular(X: pd.DataFrame, num: list[str], cat: list[str],
+             scores: np.ndarray | None = None, limiar: float | None = None,
              n_bins: int = N_BINS) -> dict:
-    """Congela a distribuição de `X` — o que vai dentro do artefato.
+    """Congela as duas distribuições de referência — o que vai dentro do artefato.
 
-    Chamado sobre `dados.treino.X` e **só** sobre ele: validação e teste têm
-    outra finalidade, e usar a base inteira faria o baseline conter as partições
-    em que o modelo foi medido, misturando "o que o modelo viu" com "o que
-    julgou o modelo".
+    `X` é o que ENTRA (data drift) e `scores` é o que SAI (prediction drift), e
+    as duas metades vêm de **partições diferentes de propósito**:
+
+    - `X` = `dados.treino.X`. Validação e teste julgam o modelo; usar a base
+      inteira faria o baseline conter as partições em que ele foi medido,
+      misturando "o que o modelo viu" com "o que o mediu".
+    - `scores` = probabilidades na **validação**, não no treino. In-sample o
+      modelo é otimista por construção, e um baseline otimista faria produção
+      parecer deslocada para sempre — drift fantasma permanente, que treina o
+      time a ignorar o alerta. Fora da amostra é o que se parece com produção.
+      ⚠️ Medido em 18/08/2026 neste campeão: PSI treino × validação nos scores =
+      **0,0022**, ou seja, a escolha custaria quase nada aqui (LogReg
+      regularizada com 13 features mal overfitta). A decisão é por princípio, e
+      a medição diz que ela é **barata**, não que é dispensável: com um HGB
+      profundo no lugar, o mesmo erro não sairia de graça.
+
+    🚨 **Por que `scores` não é opcional na prática:** é a única vigilância que
+    roda **sempre** em produção. As features só entram no log com
+    `TC_LOG_FEATURES=1` (custam `Gender`/`Senior Citizen`/`Partner`/`Dependents`
+    no stream de um terceiro); as probabilidades vão em toda linha, porque
+    número sem atributo ao lado não identifica ninguém. Congelar só `P(X)` seria
+    dar baseline exatamente à metade que quase nunca é coletada, e deixar sem
+    baseline a que sempre é.
     """
     numericas: dict[str, dict] = {}
     for coluna in num:
@@ -138,13 +158,81 @@ def calcular(X: pd.DataFrame, num: list[str], cat: list[str],
             },
         }
 
-    return {
+    saida = {
         "particao": "treino",
         "n": len(X),
         "n_bins": n_bins,
         "numericas": numericas,
         "categoricas": categoricas,
     }
+    if scores is not None:
+        saida["scores"] = _bloco_scores(np.asarray(scores, dtype=float),
+                                        limiar=limiar, n_bins=n_bins)
+    return saida
+
+
+def _bloco_scores(scores: np.ndarray, limiar: float | None, n_bins: int) -> dict:
+    """Baseline de prediction drift — a distribuição de saída do modelo.
+
+    🔑 Guarda também a **taxa acima do limiar**, que é o número que o negócio
+    entende: é o tamanho da fila de retenção. Prediction drift de PSI 0,3 exige
+    um analista para virar decisão; *"a fila dobrou"* não exige nenhum, e as duas
+    frases descrevem o mesmo evento. Métrica de monitoramento que só existe em
+    unidade estatística é métrica que ninguém age em cima.
+    """
+    quantis = np.linspace(0.0, 1.0, n_bins + 1)[1:-1]
+    bordas = np.unique(np.round(np.quantile(scores, quantis), CASAS)).tolist()
+    bloco = {
+        "particao": "validacao",
+        "n": int(scores.size),
+        "media": round(float(scores.mean()), CASAS),
+        "quantis": {
+            f"p{int(q * 100):02d}": round(float(np.quantile(scores, q)), CASAS)
+            for q in (0.01, 0.05, 0.25, 0.50, 0.75, 0.95, 0.99)
+        },
+        "bordas_psi": bordas,
+        "proporcoes_psi": [round(p, CASAS) for p in _proporcoes(scores, bordas)],
+    }
+    if limiar is not None:
+        bloco["limiar"] = round(float(limiar), CASAS)
+        bloco["taxa_acima_do_limiar"] = round(float((scores >= limiar).mean()), CASAS)
+    return bloco
+
+
+def comparar_scores(referencia: dict, scores: list[float]) -> dict:
+    """Prediction drift: a janela de saídas contra o baseline da validação.
+
+    Roda **sem rótulo e em tempo real**, o que a qualidade preditiva não
+    consegue: acurácia depende de ground truth, e o churn só se confirma no fim
+    do ciclo de faturamento — a janela cega. Prediction drift é sintoma e não
+    causa, mas é sintoma de graça e disponível hoje.
+    """
+    ref = referencia.get("scores")
+    if not ref:
+        raise KeyError("referência sem baseline de scores — artefato pré-10a-2?")
+
+    valores = np.asarray(scores, dtype=float)
+    if valores.size == 0:
+        return {"n": 0, "psi": None, "classificacao": "sem-dados"}
+
+    atuais = _proporcoes(valores, ref["bordas_psi"])
+    valor = psi(ref["proporcoes_psi"], atuais)
+    saida = {
+        "n": int(valores.size),
+        "psi": round(valor, CASAS),
+        "classificacao": classificar(valor),
+        "media_ref": ref["media"],
+        "media_janela": round(float(valores.mean()), CASAS),
+    }
+    if "limiar" in ref:
+        taxa = float((valores >= ref["limiar"]).mean())
+        saida["taxa_acima_do_limiar_ref"] = ref["taxa_acima_do_limiar"]
+        saida["taxa_acima_do_limiar"] = round(taxa, CASAS)
+        # Quantas vezes a fila de retenção cresceu. O sinal que se leva para uma
+        # reunião sem traduzir.
+        if ref["taxa_acima_do_limiar"] > 0:
+            saida["fila_x"] = round(taxa / ref["taxa_acima_do_limiar"], 3)
+    return saida
 
 
 def psi(esperadas: list[float], atuais: list[float]) -> float:
