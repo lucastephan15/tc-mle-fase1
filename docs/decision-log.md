@@ -2142,6 +2142,274 @@ Três silêncios que o painel se recusa a produzir, cada um com teste próprio:
 rótulo, e o churn só se confirma ao fim do ciclo de faturamento. É a janela cega do ground truth —
 e a razão de o drift ser o que se vigia em tempo real.
 
+---
+
+### 10b · As quatro famílias de métricas, instanciadas em churn (19/08/2026)
+
+> *Alerta sem ação definida é ruído; e limiar sem denominador não escala.*
+
+A forma de cada linha é **sinal → KPI → gatilho → desarme → janela → ação**. As duas
+colunas do meio existem porque **um limiar oscila e dois não**: dispara a 5,1%, silencia
+a 4,9%, dispara de novo. Sem o limiar de desarme, cada oscilação em torno do gatilho
+consome um ciclo de investigação — que é a versão cara da fadiga de alerta.
+
+| família | sinal (KPI) | gatilho | desarme | janela | ação |
+|---|---|---|---|---|---|
+| **serviço** | p95 de `/v1/predict`, **medido no cliente** | > 1.500 ms | < 800 ms | 3 janelas | investigar rede × app confrontando com o `x-response-time-ms` da própria resposta |
+| **serviço** | 5xx ÷ **total de requisições da janela** | > 1% | < 0,2% | 2 janelas | **é bug, não drift** — ler o log pelo `request_id`, não retreinar |
+| **serviço** | 4xx ÷ total | > 5% | < 1% | **imediata** | contrato quebrado a montante: categoria nova, campo faltando, sentinela de nulo |
+| **drift** | PSI por coluna, bordas congeladas | > 0,25 | < 0,10 | 3 janelas | validar integridade **antes** de culpar o mundo; se for mundo, abrir a decisão de retreino (10d) |
+| **drift** | PSI dos `scores` (`P(ŷ)`) | > 0,25 | < 0,10 | 3 janelas | idem, e é o único que roda sem custo de privacidade |
+| **drift** | **taxa acima do limiar** (tamanho da fila), base **0,3769** | desvio > ±25% | dentro de ±10% | 3 janelas | conversar com a operação **antes** do PSI: já vem na unidade da decisão |
+| **negócio** | volume de predições ÷ mediana das 4 janelas anteriores | < 0,5× | > 0,8× | 2 janelas | falha upstream — *"sem erro" não é "tudo bem"* |
+| **qualidade** | PR-AUC no lote reconciliado | < 0,66 | ≥ 0,68 | por lote de rótulo | reavaliar; retreino passa pelo gate |
+| **qualidade** | Brier no lote reconciliado | > 0,14 | ≤ 0,13 | por lote de rótulo | recalibrar / re-derivar o limiar |
+| **fairness** | disparidade de recall entre grupos | > 10 pp | ≤ 7 pp | por lote de rótulo | Etapa 10.5 — o limite é escrito **antes** de medir |
+
+**Três linhas que ficam vazias de propósito, e a ausência é a informação:** *tráfego*
+(RPS) e *saturação* (CPU/memória) não têm base — não há carga real, e limiar inventado
+sobre tráfego que não existe é decoração; *taxa de aceitação da campanha* não é
+observável no escopo, porque todas as métricas do TC são offline e o dataset não carrega
+a conversão da retenção. Um ❌ justificado vale mais que um ✅ inventado.
+
+#### 🔑 A régua do PSI já é uma banda morta — e ninguém a lê assim
+
+`<0,10 estável · 0,10–0,25 investigar · >0,25 agir` é citada em todo material como uma
+**escala de severidade**. Ela é melhor que isso: com os dois extremos usados como
+gatilho e desarme, a faixa do meio vira exatamente a **zona morta de um termostato**, e
+o estado do alerta só muda quando o sinal atravessa a banda inteira. Não foi preciso
+inventar um segundo número — ele já estava na regra, sem uso.
+
+🔗 É a mesma histerese da regra 1-SE das Etapas 6 e 7, aplicada ao **tempo** em vez da
+complexidade: não trocar de estado por movimento que cabe dentro da variação esperada.
+
+#### 📏 O limiar de drift foi calibrado contra o ruído MEDIDO, não contra a regra de bolso
+
+A prática manda *observar a variabilidade normal antes de fixar o threshold*. Isso
+costuma ficar como intenção; aqui há número, e ele veio de graça dos controles da 10a-2:
+
+| medição | PSI | leitura |
+|---|---|---|
+| treino × treino | 0,0000 | o instrumento não inventa sinal |
+| **validação × treino** (só ruído de partição) | **0,0128** | é o piso do que "nada aconteceu" produz |
+| `Monthly Charges` ×1,15 | 1,46 | 114× o ruído |
+| `Tenure Months` +12 | 3,55 | 277× o ruído |
+
+⇒ O gatilho de 0,25 está a **19,5×** o ruído de partição e o de investigação a **7,8×**.
+A folga não é confortável por acidente: é o que separa este limiar de um número copiado.
+
+#### 🚨 Toda taxa tem denominador, e a janela é de VOLUME, não de tempo
+
+`rate(5xx[5m]) > 0.05` — a forma que o material da M04-A07 usa — **não** é "5% das
+requisições": é **5xx por segundo**. Como está, dispara com 3 erros por minuto
+independentemente do volume, e **piora conforme o produto cresce**. Toda linha da tabela
+acima é escrita como razão com o denominador visível.
+
+E a **janela é `n ≥ 400` predições**, não "por dia". Sem carga real, janela temporal é
+chute: um dia com 12 requisições produziria decis com dois pontos cada e um PSI que
+oscila por conta própria. 400 é o tamanho de janela que o `simulate_drift.py` usa e no
+qual os controles acima foram medidos — o limiar e a janela em que ele foi calibrado
+viajam juntos, ou o número não significa o que diz.
+
+#### 🚨 O ponto de medição faz parte do limiar
+
+Medido em produção, Brasil → Oregon, 0,1 CPU:
+
+| cronômetro | p50 | p95 |
+|---|---|---|
+| cliente (`curl`, unitário) | 254 ms | 670 ms |
+| **a própria API** (`x-response-time-ms`) | **1,16 ms** | — |
+
+**219× de diferença** na mesma requisição. Um SLA de "p95 < 300 ms" seria violado o
+tempo todo medindo do Brasil e nunca medindo de dentro — e as duas leituras estão
+certas. Por isso o limiar de 1.500 ms diz **"medido no cliente"**, e a ação manda
+confrontar as duas: p95 externo subindo com o interno parado é rede ou plataforma, e
+retreinar modelo não conserta latitude. *Latência sem o ponto de medição declarado é
+métrica sem piso.*
+⚠️ **O cold start fica fora por construção** — o plano gratuito dorme em 15 min e a
+primeira requisição custa ~30 s. Contá-lo no p95 faria o alerta disparar por causa da
+característica que torna o plano gratuito.
+
+#### Quem age — e por que a coluna existe mesmo solo
+
+O projeto é individual, então todos os papéis são a mesma pessoa. Escrever o RACI mesmo
+assim não é formalidade: **alerta sem dono é o alerta que ninguém desliga e ninguém
+atende**. No mundo real, a família de *serviço* é do time de plataforma (dispara paging),
+a de *drift* e *qualidade* é do dono do modelo (abre investigação, não incidente), e a de
+*negócio* é de quem opera a campanha. A distinção prática que sobrevive ao solo é o
+**canal**: 5xx acorda alguém; PSI abre um item de backlog com prazo. Detalhamento na
+Etapa 10.5.
+
+---
+
+### 10d · Política de retreino (19/08/2026)
+
+> *O gargalo nunca foi saber que precisa atualizar — é o custo de atualizar. E a decisão
+> de retreinar é uma decisão de negócio disfarçada de tarefa técnica.*
+
+**Pressuposto declarado, porque a resposta não está no dataset:** o Telco é um retrato
+sem eixo temporal (limitação registrada na Etapa 0), então **não temos como medir** em
+quantos dias o rótulo se confirma. Assume-se **~60 dias** — dois ciclos de faturamento
+mais carência — e a política inteira é dimensionada sobre esse número. Se ele estiver
+errado, o que muda é a frequência, não a estrutura.
+
+| gatilho | vale aqui? | ponto cego | decisão |
+|---|---|---|---|
+| **agendado** (trimestral) | ✅ **piso de segurança** | retreinar à toa gasta recurso e pode injetar ruído | adotado — com o gate barrando o modelo pior |
+| **degradação de performance** | ⚠️ **inútil sozinho** | reage com 60 dias de atraso; até lá o dano já ocorreu | mantido como confirmação, nunca como detector |
+| **data / prediction drift** | ✅ **é o detector real** | falso positivo | adotado **com banda morta + 3 janelas** (10b) |
+| **on demand** | ✅ | depende de alguém perceber | reajuste tarifário anunciado, mudança regulatória, viés achado na 10.5 |
+| **online / contínuo** | ❌ | instabilidade, e exige rótulo rápido | descartado: a janela cega o torna impossível aqui |
+
+**O padrão é a combinação:** agendado como piso, drift como reação. E a ordem importa —
+**drift não dispara retreino, dispara investigação**. Pipeline que retreina sozinho ao
+ver PSI alto é uma máquina de pôr modelo pior em produção mais rápido.
+
+#### 🚨 A janela cega é o que estrutura a política, não um detalhe
+
+Concept drift é mudança em `P(y|X)` e **só é detectável com rótulo** — não é limitação de
+ferramenta, é que o objeto que mudou não existe sem `y`. Com ~60 dias de atraso, um
+gatilho por performance é um retrovisor: quando ele acender, dois meses de campanha já
+foram priorizados com um modelo pior. É exatamente por isso que o drift de `P(X)` e de
+`P(ŷ)`, que roda em tempo real e sem rótulo, é o **proxy** — e é também por isso que ele
+não pode ser tratado como prova: ele responde *"quem chega mudou?"*, nunca *"a regra
+mudou?"*.
+
+#### 🚨 O log de inferência NÃO é fonte de rótulo
+
+*"Retreine com os dados novos capturados"* soa razoável e é impossível aqui: o log
+guarda a **predição**, não o desfecho. Retreinar com ele é self-training degenerativo —
+o erro da versão anterior vira alvo da próxima e o modelo aprende a concordar consigo
+mesmo, com as métricas melhorando enquanto a realidade se afasta.
+
+⇒ O rótulo vem da base transacional ao fim do ciclo, reconciliado pelo **`request_id`**
+que a resposta devolve e o log grava. Sem essa chave não existe retreino supervisionado,
+só a ilusão dele — e é a razão de o `request_id` ter sido gerado no servidor desde a 9d,
+antes de existir log para escrevê-lo.
+
+#### 🚨 E o rótulo reconciliado vem contaminado pela própria campanha
+
+O modelo marca o cliente, a operação liga e dá desconto, **o cliente fica**. O desfecho
+registrado é "não churnou" e o modelo é **penalizado por ter acertado**. Pior: os dados
+do próximo treino já não descrevem o mundo sem intervenção.
+
+⇒ **Grupo de controle**: uma fatia dos preditos como risco que *não* recebe a campanha.
+É a única forma de medir o modelo limpo **e** o valor real da campanha — que é a pergunta
+que paga a conta. Fora do escopo de implementação (não há campanha real), mas a política
+o exige e a Etapa 11 declara.
+
+#### 🔑 O CI já é a trava do retreino — e não foi projetado para isso
+
+O teste de caracterização exige `|PR-AUC − 0,6646| ≤ 1e-4`. Um modelo retreinado
+**sempre** viola isso, mesmo melhor: a menor mudança já medida (remover `Contract`)
+desloca 0,0019, dezenove vezes a tolerância. Logo:
+
+> **é impossível promover um retreino sem alguém editar `PR_AUC_REF` e `BRIER_REF` no
+> mesmo commit** — e isso é um diff, revisável, com data e autor.
+
+Aquilo que a Etapa 9.5 escolheu por escrito — **Continuous Delivery, não Deployment**,
+com humano no último passo — já estava implementado em código antes de ter esse nome. A
+combinação é o mecanismo completo: o **gate de dois eixos** (`PR-AUC ≥ 0,66` **e**
+`Brier ≤ 0,14`) impede promover um modelo pior; o **teste de caracterização** impede
+promover um modelo *diferente* **em silêncio**. Piso e contrato fazem perguntas
+diferentes, e o retreino precisa das duas respostas.
+
+#### O que fazer quando o alerta acende — e retreinar não é a primeira opção
+
+1. **Integridade antes de drift.** *Mudou o mundo ou mudou o meu pipeline?* Um join que
+   duplicou linhas, uma unidade que trocou de escala, um campo que passou a vir nulo:
+   retreinar sobre dado quebrado **assa o bug dentro do modelo novo**. O painel já ajuda —
+   o `simulate_drift.py` mediu que `Tenure Months` a 3,59 com `Total Charges` em 0,034 é
+   a assinatura de uma **coluna** deslocada, não de uma população que envelheceu.
+2. **Identidade antes de estatística.** O `monitoring.py` conta os `artefato_sha256`
+   distintos na janela: PSI alto tem duas explicações, e "trocaram o modelo no meio da
+   janela" é a que se descarta primeiro porque custa uma contagem.
+3. **Só então a decisão de retreinar**, que passa pelo gate e pelo diff acima.
+
+**Contingência (degradar com graça):** se o artefato não carregar, o processo **morre na
+inicialização** por decisão — não existe modo degradado servindo predição de origem
+desconhecida. O fallback de negócio não é outro modelo: é a fila ordenada pela regra
+simples que a Etapa 6 já validou como forte (contrato mês-a-mês), no espírito do Uber
+trocando o modelo de ETA por uma fórmula de distância. Pior que o modelo, muito melhor
+que nada, e explicável por telefone.
+
+---
+
+### 10e · Rollback e troca segura de versão (19/08/2026)
+
+> *A segurança do rollback é o que encoraja atualizar com frequência. Quem não sabe
+> voltar atrás congela — e modelo congelado apodrece em produção.*
+
+**O estado de partida é bom e foi construído sem este objetivo:** o artefato é versionado
+no Git (exceção nomeada de 8,1 KB da 9f), o `/health` declara o `artefato_sha256`
+carregado, e o Render implanta atrelado ao CI (`autoDeployTrigger: checksPass`). Três
+versões do campeão são recuperáveis por Git; os nove candidatos das Etapas 6–8 seguem no
+`mlruns/`. *Backup off-site do modelo versionado* sai de graça.
+
+#### O procedimento, em duas camadas — e a ordem não é opcional
+
+| # | passo | mecanismo | tempo |
+|---|---|---|---|
+| 1 | **parar o sangramento** | painel do Render → *Rollback* para o deploy anterior (re-implanta a **imagem** inteira) | minutos |
+| 2 | **conferir a identidade** | `GET /health` → `artefato_sha256` **é o esperado** | segundos |
+| 3 | **tornar definitivo** | `git revert` do commit que promoveu (ou `git checkout <sha> -- models/campeao.joblib`) + `make ci` + push | uma hora |
+| 4 | **reconferir** | `/health` de novo, depois que o `checksPass` re-implantar | segundos |
+| 5 | **registrar** | linha no decision log: o que caiu, qual sha voltou, por quê | — |
+
+#### 🚨 Rollback só no painel é reversão que o próximo push desfaz
+
+Esta é a armadilha específica desta arquitetura, e ela é consequência direta de uma
+decisão que estava certa. Como o **artefato viaja no repositório** e o Render implanta a
+cada commit aprovado pelo CI, o passo 1 sozinho é temporário: **o próximo commit de
+qualquer natureza — um ajuste de README — reconstrói a imagem a partir da `main` e traz
+o artefato ruim de volta**, com o CI verde e sem nada acusando.
+
+🔑 *Onde o artefato é versionado junto do código, o rollback também tem de ser versionado
+junto do código.* O passo 1 é anestesia; o passo 3 é a cirurgia. Fazer só o primeiro é
+programar a recaída para a próxima sexta-feira.
+
+#### 🎯 A verificação de identidade é o que separa rollback de esperança
+
+O passo 2 não é zelo: reverter e **não conferir** é exatamente o cenário da Knight
+Capital — sete servidores com o código novo e um com o velho, e nada no sistema
+perguntando qual estava servindo. Aqui a pergunta custa um `curl`, porque o `/health`
+foi construído na 9d para respondê-la:
+
+    curl -s https://tc-churn-api.onrender.com/health | jq '.artefato_sha256, .versao_modelo'
+
+⚠️ **E há um preço declarado:** só **um** artefato entra na imagem (o `.dockerignore` é
+allowlist e a exceção do `.gitignore` nomeia um arquivo). Logo `TC_ARTEFATO` **não**
+permite trocar de modelo sem reconstruir — o rollback custa um deploy, não uma variável
+de ambiente. Foi o preço de não ter registry acessível ao build no plano gratuito, e a
+evolução natural é o Model Registry com alias `Production`, onde reverter é trocar um
+ponteiro.
+
+#### As estratégias de release: qual está feita, quais não cabem e por quê
+
+| estratégia | mecanismo | mede antes de decidir? | estado |
+|---|---|---|---|
+| **endpoint versionado** (`/v1` → `/v2`) | o cliente escolhe a URL | não — depende de o cliente migrar | ✅ **já feito na 9d**, antes de ter esse nome |
+| **blue-green** | dois ambientes idênticos, comuta o roteamento | **não** — o Green nunca viu tráfego real até ser 100% | ❌ dobra o custo; o plano é gratuito e único |
+| **canary** | 5% → 20% → 50% → 100% | ✅ **o único que mede** | ❌ exige roteador de tráfego |
+
+🔑 **A distinção que vale a linha:** blue-green tem risco **zero antes** da comutação e
+**total depois**; canary tem risco pequeno e contínuo, e é o único que mede antes de
+decidir. E o corolário que amarra na Etapa 7: canary é teste A/B em produção, 5% de
+tráfego é uma **amostra**, amostra tem incerteza ⇒ promover pelo resultado da primeira
+janela é **o mesmo pecado do pico da grade**. *Canary sem teste de significância é 1% de
+tráfego produzindo uma decisão de 100%.*
+
+⚠️ **O que não foi feito, dito com todas as letras:** o procedimento acima está escrito e
+os mecanismos existem, mas **um rollback real nunca foi executado** — não há versão ruim
+em produção para reverter, e fabricar uma para testar custaria um ciclo de deploy sem
+ninguém do outro lado para observar. É a linha 🟡 do checklist de manutenção: *rollback
+declarado, não testado*. Declará-lo assim vale mais que um ✅ que a banca não pode
+verificar — e é o mesmo critério pelo qual o gate, o healthcheck e o baseline **foram**
+verificados reprovando: quando o teste é possível, ele é obrigatório; quando não é, a
+ausência é escrita.
+
+---
+
 ## 6. Decisão do modelo final
 
 *(preenchida ao fim da Etapa 8 — a fase de modelagem está fechada; o teste segue intocado até a
@@ -2322,3 +2590,16 @@ Etapa 11.)*
 | 2026-08-17 | 9d | **Escopo declarado:** sem autenticação, `/docs` aberta, sem padrões GoF, sem log JSONL | limitação declarada vale mais que omissão; `/docs` publica a descrição do modelo, não dado pessoal; padrão que não paga é patternitis; o log é Etapa 10, e o `request_id` já é o gancho |
 | 2026-08-17 | 9d | 🚨 **Nenhum `app = criar_app()` de módulo: o uvicorn recebe a FACTORY** (`--factory`) | erro cometido e pego pelo CI: o objeto de módulo tornava a carga do artefato **efeito colateral do import**, e a suíte inteira falhava na coleta no runner limpo (`models/` vazio por decisão) enquanto `make ci` local passava. 🔑 *O defeito só existe onde o arquivo não existe* — nenhuma execução local podia encontrá-lo |
 | 2026-08-17 | 9d | `config.ARTEFATO` configurável por **`TC_ARTEFATO`**, com teste de import em subprocesso | traz o defeito acima para dentro do alcance do desenvolvimento (simula a máquina limpa) e é o que o container vai querer de qualquer forma, quando o artefato vier de um volume |
+| 2026-08-19 | 10b | **Banda morta em todo alerta: dois limiares (gatilho e desarme) + persistência de janelas**, e não um limiar único | um limiar oscila em torno de si mesmo e cada oscilação consome um ciclo de investigação. 🔑 A régua do PSI (`<0,10 / 0,10–0,25 / >0,25`) **já era** um termostato e ninguém a lê assim: as pontas viram gatilho e desarme, o meio vira zona morta. Mesma histerese da regra 1-SE, aplicada ao tempo |
+| 2026-08-19 | 10b | Limiares de drift **calibrados contra o ruído medido**, não copiados da regra de bolso | validação × treino (só ruído de partição) dá PSI **0,0128** ⇒ o gatilho de 0,25 está a **19,5×** desse piso e o de investigação a 7,8×. É *"observar a variabilidade normal antes de fixar o threshold"* com número em vez de intenção |
+| 2026-08-19 | 10b | **Toda taxa é escrita com denominador visível, e a janela é de VOLUME (`n ≥ 400`)**, não de tempo | `rate(5xx[5m]) > 0.05` (forma do material) é 5xx **por segundo**, não 5%: dispara com 3 erros/min e piora conforme o produto cresce. E sem carga real, janela por dia produziria decis de dois pontos — 400 é a janela em que os controles foram medidos |
+| 2026-08-19 | 10b | O limiar de latência declara o **ponto de medição** | mesma requisição: **254 ms** no cliente (Brasil→Oregon) × **1,16 ms** no cronômetro da própria API — 219×. As duas leituras estão certas; um SLA sem o ponto declarado é métrica sem piso. Cold start (~30 s) fica fora por construção |
+| 2026-08-19 | 10b | Tráfego, saturação e taxa de aceitação da campanha ficam **explicitamente vazios** | não há carga real nem conversão observável (métricas offline). Limiar inventado sobre tráfego inexistente é decoração — um ❌ justificado vale mais que um ✅ que ninguém pode verificar |
+| 2026-08-19 | 10d | **Agendado (trimestral) como piso + drift como reação**; degradação de performance só como confirmação | a janela cega do ground truth (~60 dias, **pressuposto declarado** — o dataset não tem eixo temporal) torna o gatilho por performance um retrovisor. E drift dispara **investigação**, nunca retreino automático |
+| 2026-08-19 | 10d | **O log de inferência não é fonte de rótulo**; o rótulo vem da base transacional, reconciliado por `request_id` | retreinar com a predição é self-training degenerativo: o erro da versão anterior vira alvo da próxima e as métricas melhoram enquanto a realidade se afasta. É a razão de o `request_id` existir desde a 9d, antes de haver log |
+| 2026-08-19 | 10d | **Grupo de controle** exigido pela política (fatia dos preditos que não recebe campanha) | feedback loop: a retenção altera o rótulo de quem o modelo acertou, e o modelo é penalizado por ter acertado. É a única forma de medir o modelo limpo **e** o valor real da campanha. Fora do escopo de implementação, dentro do escopo da política |
+| 2026-08-19 | 10d | 🔑 **Achado: o CI já era a trava do retreino, sem ter sido projetado para isso** | o teste de caracterização (`\|PR-AUC − 0,6646\| ≤ 1e-4`) reprova **qualquer** retreino, inclusive melhor ⇒ promover exige editar `PR_AUC_REF`/`BRIER_REF` no mesmo commit, o que é um diff revisável. O *Continuous Delivery* escolhido por escrito na 9.5 já estava implementado em código. Gate = "é bom o bastante?"; caracterização = "é o mesmo?" |
+| 2026-08-19 | 10e | **Rollback em duas camadas, nesta ordem:** painel do Render (imagem, minutos) → `git revert` do artefato + CI + push (definitivo) | 🚨 como o artefato é versionado junto do código e o Render implanta por `checksPass`, **o rollback só no painel é desfeito pelo próximo commit de qualquer natureza** — um ajuste de README reconstrói a imagem da `main` e traz o artefato ruim de volta, com o CI verde. *Onde o artefato é versionado junto do código, o rollback também tem de ser* |
+| 2026-08-19 | 10e | Passo obrigatório de **conferência de identidade** (`/health` → `artefato_sha256`) depois de cada camada do rollback | reverter e não conferir é o cenário da Knight Capital com outra roupa. Custa um `curl` porque o `/health` foi construído na 9d para responder isso |
+| 2026-08-19 | 10e | Blue-green e canary **descartados com motivo**; endpoint versionado (`/v1`) reconhecido como a estratégia que já estava feita | blue-green dobra o custo (plano gratuito e único) e não mede nada antes da comutação; canary exige roteador de tráfego. E canary sem teste de significância é 1% de tráfego produzindo uma decisão de 100% — o pecado do pico da grade, em produção |
+| 2026-08-19 | 10e | **Rollback declarado e NÃO testado**, dito com todas as letras | não há versão ruim em produção para reverter, e fabricar uma custaria um ciclo de deploy sem ninguém observando. Onde o teste é possível ele é obrigatório (gate, healthcheck, baseline — todos verificados reprovando); onde não é, a ausência é escrita |
