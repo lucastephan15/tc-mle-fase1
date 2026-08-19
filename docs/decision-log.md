@@ -2410,6 +2410,114 @@ ausência é escrita.
 
 ---
 
+## 5g. Etapa 10.5 — governança, fairness e conformidade
+
+### ⚠️ PRÉ-REGISTRO — escrito ANTES de rodar a auditoria (19/08/2026)
+
+> Este bloco foi commitado **antes** de a primeira linha de `MetricFrame` existir, e o `git log`
+> é a prova. O motivo é o de sempre nas etapas anteriores (7, 8): um limite escrito **depois** do
+> resultado não é limite, é negociação — *"12 pontos tá ruim? ah, dá para viver com isso"*. A
+> diferença aqui é que o objeto negociado não é uma métrica, são pessoas.
+
+#### 1. A métrica que carrega o dano — e por que não é a acurácia
+
+Desagregar a métrica errada produz uma tabela tranquilizadora sobre um problema que continua lá.
+Em churn o dano **não** mora na acurácia: mora no **falso negativo**. O cliente que ia cancelar e
+o modelo não marcou **não entra na fila de retenção**, não recebe oferta, e vai embora — e o
+prejuízo nunca vira linha de planilha, porque ninguém registra a campanha que não foi feita.
+
+⇒ A métrica pré-registrada é o **recall por grupo** (equivalentemente, a **FNR**: `FNR = 1 −
+recall`). `selection_rate` entra como **diagnóstico**, não como critério — ver o item 3.
+
+#### 2. O limite, escrito antes: **disparidade de recall ≤ 10 pontos percentuais**
+
+| item | valor |
+|---|---|
+| métrica | recall (por grupo) |
+| **limite de disparidade** (max − min) | **≤ 10 pp** |
+| desarme (10b) | ≤ 7 pp |
+| partição | **validação** (o teste segue intocado até a Etapa 11) |
+| limiar | **0,29 — o de operação**, não o 0,5 implícito |
+| atributos auditados | `Gender`, `Senior Citizen`, `Partner`, `Dependents` |
+| exploratório (sem gate) | `Zip Code`/`City` agregados, se houver grupo com n suficiente |
+
+⚠️ **O limiar da auditoria é o de operação, e isto não é detalhe.** Auditar em 0,5 mediria um
+modelo que este projeto não usa: a fila real é cortada em 0,29, e é nesse ponto que se decide quem
+recebe campanha. Uma auditoria no limiar errado é tecnicamente correta e operacionalmente ficção.
+
+⚠️ **Quem decidiu os 10 pp.** O projeto é solo, então quem escreveu o número é quem o cumpre — o
+que é exatamente a situação que a literatura desaconselha. O registro honesto é este: **10 pp é uma
+decisão de negócio e jurídica que um engenheiro não deveria tomar sozinho**, adotada aqui por
+ausência de contraparte, com o valor declarado antes da medição para que ao menos não seja
+*post hoc*. Num contexto real, quem assina é o dono do produto com o jurídico. Está no RACI.
+
+#### 3. A definição de fairness escolhida — e a que foi recusada, com o motivo
+
+**Escolhida: paridade de erro** (família *equalized odds*) — mesma taxa de falso negativo entre
+grupos. **Recusada: paridade demográfica** (mesma taxa de seleção entre grupos).
+
+O motivo é substantivo, não estético. A prevalência real de churn **difere entre grupos** nesta
+base. Exigir a mesma taxa de seleção forçaria o modelo a **subatender o grupo de maior risco** para
+igualar a estatística — ou seja, deixaria de ligar para quem tem mais chance de cancelar, em nome
+da paridade. Isso prejudicaria justamente quem a métrica pretendia proteger.
+
+🔑 **E a escolha é obrigatória, não opcional:** paridade demográfica e equalized odds são
+**matematicamente incompatíveis** quando a prevalência difere entre grupos (Kleinberg et al.;
+Chouldechova). Não é limitação de ferramenta, é aritmética — logo *alguma* delas tem de ser
+abandonada, e a única resposta errada é não escolher.
+
+⇒ `selection_rate` **será medido e reportado**, porque é o diagnóstico que explica a disparidade de
+recall. Mas um `selection_rate` maior para um grupo **não** é achado de viés se a prevalência dele
+for maior: é o modelo funcionando.
+
+#### 4. Previsões falseáveis — o que espero encontrar (escrito antes de ver)
+
+1. **`Gender`: disparidade < 3 pp.** Gênero é notoriamente sem sinal em churn de telecom, e a
+   Etapa 5 mediu que remover as demográficas custa **zero** de PR-AUC. Se der grande, desconfio
+   primeiro de tamanho de grupo, não de viés.
+2. **`Senior Citizen`: `selection_rate` claramente MAIOR no grupo idoso, e disparidade de recall
+   pequena.** É o caso em que as duas definições de fairness divergem visivelmente — e é por isso
+   que ele é o atributo principal da auditoria.
+3. **`Dependents` e `Partner` são os candidatos reais a estourar**, porque correlacionam com
+   `Contract` e `Tenure Months`, que são as features fortes. Se houver problema, está aqui.
+4. **Nenhum grupo estoura os 10 pp.** Modelo linear, atributo sensível **dentro** das features (a
+   Etapa 5 manteve de propósito), sem reponderação: espero disparidade moderada. ⚠️ Se eu estiver
+   certo, o resultado **não** prova que o modelo é justo — prova que ele não é injusto *nesta
+   métrica, neste limiar, nestes quatro atributos*. A distinção vai escrita no Model Card.
+
+#### 5. O que acontece se estourar — decidido antes, para não virar racionalização
+
+Em ordem, e **nenhuma delas é "remover a coluna"**:
+1. **Diagnosticar**: é disparidade de erro ou é diferença de prevalência? `selection_rate` e
+   prevalência por grupo respondem.
+2. **Re-derivar o limiar por grupo** — a saída tecnicamente honesta, e a que muda a decisão
+   operacional (a fila) sem mexer no modelo.
+3. **Aceitar declarando**, com o número no Model Card e a justificativa. ⚠️ Só é legítimo se a
+   decisão tiver dono; solo, o dono sou eu, e isso está dito.
+4. **Reponderar/mitigar** (`fairlearn.reductions`) — e aqui o trade-off é pré-registrado: **se a
+   mitigação derrubar o PR-AUC global, isso é resultado, não fracasso**, e os dois números vão para
+   a documentação. Um modelo 0,01 pior que atende os grupos de forma equilibrada pode ser a escolha
+   certa; o que não é legítimo é medir os dois e reportar só o que convém.
+
+🚨 **O que NÃO será feito, e é o reflexo mais comum:** remover `Gender`/`Senior Citizen` das
+features. Isso é *fairness through unawareness* — o modelo reconstrói o atributo pelos proxies
+(`Contract`, `Tenure Months`, `Monthly Charges`) e o único efeito garantido é **destruir a
+capacidade de medir a disparidade**. Ficaria um modelo igualmente enviesado e cego para provar o
+contrário. A Etapa 5 já registrou que mantê-los custa **zero** de PR-AUC — a decisão de mantê-los
+foi tomada lá, para poder ser auditada aqui.
+
+#### 6. O gate — porque Model Card sem `assert` é marketing
+
+O limite dos 10 pp vira **teste no CI** (`test_fairness_gate`), ao lado do gate de dois eixos e do
+teste de caracterização. O critério da casa é o mesmo desde a Etapa 9.5: **um controle que nunca
+falhou não foi testado, foi presumido** — então ele entra **verificado reprovando** (baixar o
+limite artificialmente ⇒ vermelho ⇒ reverter).
+
+⇒ Depois da auditoria, este bloco ganha a seção de **resultados** logo abaixo, com o placar do
+pré-registro (quantas das 4 previsões se confirmaram), no mesmo formato das Etapas 7 e 8.
+
+---
+
 ## 6. Decisão do modelo final
 
 *(preenchida ao fim da Etapa 8 — a fase de modelagem está fechada; o teste segue intocado até a
