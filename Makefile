@@ -51,6 +51,13 @@ promover: exige-venv  ## Etapa 9c — grava models/campeao.joblib (só se passar
 artefato: exige-venv  ## Mostra o que está promovido hoje (versão, sha256, features)
 	$(PY) -m src.artefato
 
+auditar: exige-venv  ## Etapa 10.5 — fairness desagregado por grupo sensível
+	# Mede no limiar de OPERAÇÃO (0,29), não no 0,5: a fila real é cortada ali,
+	# e auditar no limiar errado descreve um modelo que o projeto não usa.
+	# NÃO retorna 1 quando estoura o limite: a decisão registrada (§5g) é
+	# aceitar e declarar. Quem barra mudança é tests/test_fairness.py.
+	$(PY) -m src.fairness
+
 api: exige-venv  ## Sobe a API local em http://localhost:8000 (docs em /docs)
 	# Sem --reload: é servidor de desenvolvimento e recarregador de código, não
 	# um modo "verbose". Em produção quem define o nº de workers é a RAM

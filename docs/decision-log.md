@@ -2516,6 +2516,152 @@ limite artificialmente ⇒ vermelho ⇒ reverter).
 ⇒ Depois da auditoria, este bloco ganha a seção de **resultados** logo abaixo, com o placar do
 pré-registro (quantas das 4 previsões se confirmaram), no mesmo formato das Etapas 7 e 8.
 
+### Resultado da auditoria (19/08/2026) — três das quatro previsões erradas
+
+    make auditar
+
+| atributo | grupo pior | recall | recall do outro grupo | disparidade | limite (10 pp) |
+|---|---|---|---|---|---|
+| `Gender` | Male | 0,7306 | 0,8122 | **8,16 pp** | ✅ |
+| `Senior Citizen` | **No** | 0,7374 | 0,8646 | **12,72 pp** | ❌ |
+| `Partner` | Yes | 0,7105 | 0,8108 | **10,03 pp** | ❌ |
+| `Dependents` | **Yes** | **0,2174** | 0,8063 | 🚨 **58,89 pp** | ❌ |
+
+**A leitura de negócio:** de cada 100 clientes com dependentes que iam cancelar,
+**o modelo marca 22**. Os outros 78 não entram na fila e não recebem campanha —
+o dano que a acurácia global (0,77 de recall) esconde inteiro.
+
+#### Placar do pré-registro: 1 acerto, 3 erros
+
+| # | previsão | resultado |
+|---|---|---|
+| 1 | `Gender` < 3 pp | ❌ **errada** — 8,16 pp (embora os IC95 se sobreponham: [0,748; 0,866] × [0,662; 0,792], ou seja, não é distinguível de ruído) |
+| 2 | `Senior Citizen` com `selection_rate` bem maior e recall parecido | 🟡 **metade** — a seleção é 34 pp maior (0,66 × 0,32), como previsto, mas o recall diverge 12,72 pp |
+| 3 | `Dependents`/`Partner` são os candidatos reais | ✅ **certa, e subestimada** — previ "candidatos a estourar", veio 58,89 pp |
+| 4 | nenhum grupo estoura os 10 pp | ❌ **errada** — três estouram |
+
+🔑 **O placar ruim é o argumento.** Se as quatro previsões tivessem batido, a
+auditoria teria confirmado o que eu já achava e não teria produzido informação
+nenhuma. Errar três significa que o instrumento mediu algo que a intuição não
+alcançava — que é a única razão de auditar em vez de afirmar.
+
+#### O diagnóstico, antes da decisão
+
+**1. A causa é aritmética, não um defeito.** Prevalência de churn: **7,01%** no
+grupo com dependentes contra **32,47%** no outro. Limiar global de 0,29 aplicado
+a um grupo de baixo risco marca pouca gente **por construção** — a
+`selection_rate` do grupo é 3,66%. É o **teorema da impossibilidade**
+(Kleinberg; Chouldechova) em forma concreta: com prevalências diferentes,
+calibração e paridade de erro não podem valer ao mesmo tempo.
+
+🔑 **E a explicabilidade já tinha anunciado isso**, na tabela de odds ratios que
+existia antes da auditoria: `Dependents_Yes` = **0,349**, o segundo menor
+coeficiente do modelo. O modelo aprendeu — corretamente — que esse grupo cancela
+pouco. *A disparidade não é o modelo errando; é o modelo acertando sobre um grupo
+cuja base é diferente.* O que não o isenta: o efeito sobre a pessoa é o mesmo.
+
+**2. O pior achado é o de menor amostra — e o IC não o salva.** `Dependents=Yes`
+tem **23 churners** na validação; IC95 de Clopper-Pearson = **[0,075; 0,437]**,
+largura 0,362. ⚠️ Mas o **limite superior continua abaixo** de 0,8063: mesmo no
+cenário mais favorável, o grupo é pior atendido. Reportar o IC é o que impede
+duas leituras erradas simétricas — precisão falsa ("recall é 0,2174") e descarte
+fácil ("são só 23 casos, não conta").
+
+#### As três saídas, medidas — e a que foi adotada
+
+| saída | disparidade | PR-AUC | custo/ciclo | fila |
+|---|---|---|---|---|
+| **manter e declarar (adotada)** | 58,89 pp | **0,6646** | R$ 31.750 | 37,69% |
+| limiar por grupo (0,05 no grupo `Yes`) | **6,33 pp** | 0,6646 | R$ 34.668 (**+R$ 2.918**) | 45,42% (+109 clientes) |
+| remover `Dependents` das features | 13,20 pp | **0,6427** | — | — |
+
+**Decisão (Luca, 19/08/2026): manter o modelo e declarar a disparidade.**
+O motivo registrado: mitigar por limiar por grupo é **tratar pessoas de forma
+explicitamente diferente com base em atributo protegido**. Isso é defensável como
+ação afirmativa e é tecnicamente a melhor saída medida — mas é uma decisão que
+exige dono jurídico, e este projeto não tem. *Registrar o número, o preço da
+correção (R$ 2.918 por ciclo, +9,2%) e quem deveria decidir é mais honesto que
+aplicar uma correção que ninguém autorizou.*
+
+🚨 **Achado que corrige o catálogo pela metade: `unawareness` ATENUA.** A regra
+que o repo carregava era *"remover a coluna não remove o viés"*. Medido, o
+resultado é mais matizado e mais útil: a disparidade cai de 58,89 para **13,20 pp**
+— o viés sobrevive nos proxies (`Contract`, `Tenure Months`), mas **enfraquece**.
+O que mata a opção não é ela ser inócua, é o preço: **PR-AUC 0,6427, abaixo do
+piso de 0,66** ⇒ o modelo nem seria promovível. A saída "mais justa" é reprovada
+pelo outro eixo do gate, e isso vale mais que o slogan.
+⚠️ Ressalva geral que vai junto: **um modelo pior tende a parecer mais justo** —
+no limite, um modelo aleatório tem disparidade zero. Métrica de fairness nunca é
+lida sozinha.
+
+#### 🚨 O gate de fairness NÃO barra o limite — e essa é a decisão, não um descuido
+
+A tentação era `assert disparidade <= 0.10` no CI, como a skill sugere. Aplicado
+aqui, ele **reprovaria o modelo em produção a cada push**, e a saída óbvia seria
+afrouxar o número até o verde — que é exatamente a negociação *post hoc* que o
+pré-registro existe para impedir. Um gate que nasce sendo violado não protege
+nada; ele treina o time a editar o limite.
+
+✅ **A saída é a divisão que o repo já usa para desempenho:** *piso* pergunta *"é
+bom o bastante?"*, *contrato* pergunta *"é o mesmo?"*. Aqui o "bom o bastante" foi
+**conscientemente não atingido**, e o que resta é o contrato:
+
+| teste | o que protege |
+|---|---|
+| `test_caracterizacao_da_disparidade` | os 4 números não mudam (±1e-4) sem um diff que alguém revisa — **para pior ou para melhor** |
+| `test_auditoria_usa_o_limiar_de_OPERACAO` | auditar em 0,5 mediria um modelo que o projeto não usa |
+| `test_grupo_pequeno_e_marcado_como_incerto` | 23 churners aparecem como 23, e o IC é largo de verdade |
+| `test_o_grupo_pior_e_identificado…` | disparidade **a favor** do grupo protegido não vira alarme falso (`Senior Citizen`) |
+| `test_unawareness_NAO_resolve_e_ainda_reprova_o_gate` | a alternativa descartada continua medida, não vira folclore |
+| `test_atributos_sensiveis_continuam_nas_features` | impede que alguém remova as demográficas "para não discriminar" e apague a auditoria |
+| `test_campeao_auditado_e_o_mesmo_do_gate` | a auditoria não caracteriza um terceiro modelo construído com o mesmo código |
+
+⚠️ **E a limitação vai escrita nos dois lugares** (aqui e no Model Card): enquanto
+a decisão for "aceitar", **nada no CI impede o modelo de continuar a 58,89 pp**.
+Quem carrega o compromisso é o Model Card — por isso o número está na primeira
+tela dele, e não num apêndice.
+
+#### Verificação (a disciplina de sempre: reprovando)
+
+7 testes novos. Três sabotagens, cada uma derrubando o que devia:
+
+| sabotagem | caiu |
+|---|---|
+| limiar da auditoria 0,29 → 0,5 | 4 testes (`Dependents` vai a 0,7681) |
+| `Dependents` fora de `config.CAT_DISPONIVEIS` | `test_unawareness…` e `test_atributos_sensiveis…` |
+| `MIN_CHURNERS_CONFIAVEL` 30 → 10 | `test_grupo_pequeno_e_marcado_como_incerto` |
+
+⚠️ **Erro de procedimento cometido no caminho, e vale o registro:** `git checkout
+src/fairness.py` **não reverteu** a primeira sabotagem, porque o arquivo ainda era
+*untracked* — e a terceira rodou com a primeira ainda aplicada, produzindo 4
+falhas onde devia haver 1. 🔑 *O mecanismo de desfazer só funciona sobre o que o
+sistema já conhece* — mesma família de "quem lê este arquivo, e ele lê mesmo?",
+agora do lado do `git`. Refeito com cópia de segurança explícita.
+
+#### `MODEL_CARD.md` — o que o diferencia de um folheto
+
+Na raiz do repositório, versionado. Três propriedades que a skill exige e que a
+maioria dos cards não tem: **usos NÃO pretendidos** enumerados (6 itens, incluindo
+"não usar como evidência sobre um indivíduo"), **limite numérico de disparidade**
+escrito antes da medição, e **métricas com o piso ao lado** — nenhuma sozinha.
+E a seção 7 abre com o resultado ruim: um card que só publica o que favorece o
+modelo não governa nada.
+
+#### Conformidade — o que ficou declarado
+
+- **Base legal:** legítimo interesse, **assumido** (num contexto real, quem valida
+  é o jurídico — e isso está dito, em vez de fingir que a questão não existe).
+- **Minimização:** `CustomerID` fora, geográficas fora (cardinalidade **e** proxy
+  de renda/raça), 6 colunas removidas por ablação na Etapa 5.
+- **Art. 20 (revisão):** predição é apoio; a resposta traz score, decisão **e** o
+  limiar, para que quem opera possa discordar do corte.
+- **Art. 20 (explicação):** a seção 6 do card — e aqui o modelo linear paga um
+  dividendo que não estava no plano: a explicação **é** o modelo, sem SHAP.
+- **AI Act:** churn com ação comercial **não** é alto risco (ao contrário de
+  crédito e saúde). Citado para registrar que o enquadramento foi **verificado**,
+  não presumido.
+- **RACI:** escrito mesmo solo, e a linha que importa é *"aceita a disparidade:
+  dono do produto + jurídico"*, com o registro de que aqui foi uma pessoa só.
 ---
 
 ## 6. Decisão do modelo final
