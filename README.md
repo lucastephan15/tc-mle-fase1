@@ -29,9 +29,20 @@ trabalho** para a equipe de Retenção agir antes da decisão final do cliente.
 | **Métricas de negócio** | recall@10% e recall@20% da base pontuada |
 | **Assimetria de custo** | falso negativo ≈ **R$ 194** × falso positivo ≈ **R$ 62** → **≈ 3:1** |
 
+📄 **A documentação da entrega é [`docs/RELATORIO.md`](docs/RELATORIO.md)** — a narrativa
+completa, do enquadramento à operação, com o número que sustenta cada decisão. Este README é
+o manual de operação; o relatório é a leitura.
+
 A conta que sustenta a razão 3:1, as premissas e os planos B estão em
-**[`docs/decision-log.md`](docs/decision-log.md)** — que é a matéria-prima desta documentação e
-é preenchido **durante** a execução, nunca depois.
+**[`docs/decision-log.md`](docs/decision-log.md)** — o **registro de decisões**, matéria-prima
+de tudo isso, preenchido **durante** a execução, nunca depois.
+
+| documento | o que é |
+|---|---|
+| [`docs/RELATORIO.md`](docs/RELATORIO.md) | 📄 **a entrega** — leitura principal |
+| [`MODEL_CARD.md`](MODEL_CARD.md) | uso pretendido, usos **proibidos**, fairness, LGPD |
+| [`docs/decision-log.md`](docs/decision-log.md) | o dossiê do processo, com o que não deu certo |
+| [`docs/resultado-teste-final.json`](docs/resultado-teste-final.json) | o registro da leitura única do teste |
 
 ---
 
@@ -76,9 +87,10 @@ GitHub Actions · Docker
 
 ```bash
 make setup      # venv + versões travadas
-make ci         # lint + 87 testes + gate de promoção — o mesmo que o CI roda
+make ci         # lint + 133 testes + gate de promoção — o mesmo que o CI roda
 make promover   # grava models/campeao.joblib — só se passar no gate
 make artefato   # mostra o que está promovido (versão, sha256, features, limiar)
+make reportar   # Etapa 11 — a leitura ÚNICA do conjunto de teste (+ figuras)
 make api        # sobe a API em http://localhost:8000 (docs em /docs)
 make help       # todos os alvos
 ```
@@ -249,7 +261,7 @@ evento de **serviço**, não de drift. Detalhes e limitações em `docs/decision
 | 7 · Tuning | ✅ concluída — §5c · **ganho zero**: o default da LogReg já era o pico da grade |
 | 8 · MLP em PyTorch | ✅ concluída — §5d · **a rede não superou** (0,6615 × 0,6646), e a regra 1-SE elegeu profundidade **zero** |
 | 9 · Pipeline serializado + API | ✅ **concluída (9c → 9f-quater)** — §5e · artefato promovido com identidade verificada na carga, API FastAPI de pé (`/health` · `/v1/predict` · `/v1/predict-batch`) e **imagem `linux/amd64` servindo o mesmo modelo** (PR-AUC idêntico nos 10 dígitos entre macOS e Linux, 0 decisões trocadas). **No ar em https://tc-churn-api.onrender.com**, com o deploy versionado em `render.yaml` e travado atrás do CI |
-| 9.5 · CI/CD | 🟡 **parcial** — QA + gate de dois eixos rodando; falta o registro (depende da Etapa 9) |
-| 10 · Monitoramento | 🟡 **em curso** — §5f · log estruturado (10a), baseline de drift dentro do artefato (10a-2), leitor de logs e **drift fabricado com detector verificado** (10c-bis) |
-| 10.5 · Governança e fairness | ⬜ |
-| 11 · Documentação | ⬜ |
+| 9.5 · CI/CD | 🟡 **parcial por decisão** — QA + gate de dois eixos + caracterização rodando; o job de registro fica omitido, com os dois bloqueios comentados no YAML (`mlruns/` morre com o runner) |
+| 10 · Monitoramento | ✅ **concluída** — §5f · log estruturado (10a), baseline de drift **dentro do artefato** (10a-2), **drift fabricado com detector verificado** (10c-bis), tabela das 4 famílias com limiar E ação (10b), política de retreino (10d) e rollback em duas camadas (10e) |
+| 10.5 · Governança e fairness | ✅ **concluída** — §5g · `MODEL_CARD.md` com pré-registro **commitado antes** da auditoria, e ela **achou**: 58,89 pp de disparidade de recall em `Dependents`, aceita e declarada com o preço das três saídas medido |
+| 11 · Documentação | ✅ **concluída** — [`docs/RELATORIO.md`](docs/RELATORIO.md) · §6b · **teste tocado uma única vez** (PR-AUC 0,6496, IC95 [0,5960; 0,7016]) · curva de ganho · seções 7 e 8 do decision log |

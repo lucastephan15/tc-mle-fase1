@@ -92,6 +92,35 @@ como métrica de decisão em lugar nenhum deste projeto.
 dois eixos, porque um modelo pode melhorar a ordenação e piorar a calibração ao
 mesmo tempo, e aí o limiar herdado passa a cortar a fila no lugar errado.
 
+### 5b. Conjunto de teste — a leitura única (Etapa 11)
+
+O teste ficou **intocado** de 10/08 a 19/08: toda seleção — features, algoritmo,
+hiperparâmetros, arquitetura da rede, limiar e gate — saiu da validação. Esta é a
+única leitura, feita sobre **o artefato promovido** (`b8109cce…`), não sobre um
+modelo retreinado.
+
+| métrica | teste (n=1.409) | validação | piso |
+|---|---|---|---|
+| **PR-AUC** | **0,6496** · IC95 [0,5960; 0,7016] | 0,6646 | 0,2654 |
+| ROC-AUC | 0,8495 | 0,8472 | 0,5 |
+| Brier | 0,1352 | 0,1339 | — |
+| recall@10% | **0,286** (75,9% do teto de 0,377) | 0,278 | 0,10 |
+| Custo do erro por ciclo | **R$ 32.882** | R$ 31.750 | R$ 72.556 · R$ 64.170 |
+
+🎯 **O IC95 tem 0,1056 de largura — 18,5× a distância entre os seis finalistas
+(0,0057).** O empate técnico entre LogReg, HGB e MLP não era indecisão de método:
+**nenhum** conjunto de teste deste tamanho poderia desempatá-los.
+
+🚨 **A métrica agregada caiu e a operacional subiu** (PR-AUC 0,6646 → 0,6496 com
+recall@10% 0,278 → 0,286). É a hierarquia declarada na Etapa 0 valendo: PR-AUC
+integra sobre limiares em que a campanha nunca vai operar; `recall@k` mede o
+ponto onde a decisão acontece. Nenhuma das variações escapa do IC.
+
+⚠️ **O piso do gate (0,66) NÃO foi movido** para acomodar o 0,6496. O gate mede a
+**validação**, por decisão registrada desde a Etapa 2; ajustá-lo agora seria mover
+o limite depois de ver o resultado. Registro em `docs/resultado-teste-final.json`,
+e um teste da suíte amarra o número publicado ao sha256 do artefato promovido.
+
 ## 6. Explicabilidade (LGPD Art. 20)
 
 O modelo é linear, então a explicação não é reconstruída *a posteriori*: ela **é**
