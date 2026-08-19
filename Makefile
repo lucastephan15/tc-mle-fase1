@@ -58,6 +58,13 @@ auditar: exige-venv  ## Etapa 10.5 — fairness desagregado por grupo sensível
 	# aceitar e declarar. Quem barra mudança é tests/test_fairness.py.
 	$(PY) -m src.fairness
 
+reportar: exige-venv  ## Etapa 11 — a leitura ÚNICA do conjunto de teste (+ figuras)
+	# Existindo docs/resultado-teste-final.json, este alvo NÃO recalcula nada: ele
+	# imprime o que foi medido. O teste é gasto pelo uso — cada decisão tomada
+	# olhando para ele o converte em validação. Para conferir que o número
+	# reproduz: $(PY) -m src.reportar --reexecutar (compara, não substitui).
+	$(PY) -m src.reportar
+
 api: exige-venv  ## Sobe a API local em http://localhost:8000 (docs em /docs)
 	# Sem --reload: é servidor de desenvolvimento e recarregador de código, não
 	# um modo "verbose". Em produção quem define o nº de workers é a RAM

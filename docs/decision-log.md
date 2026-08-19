@@ -2717,20 +2717,257 @@ Etapa 11.)*
 
 ---
 
+## 6b. O conjunto de teste — a leitura única (19/08/2026)
+
+O teste foi particionado na Etapa 2 e **não foi tocado nenhuma vez** entre 10/08 e 19/08:
+features, algoritmo, hiperparâmetros, arquitetura da rede, limiar de operação e gate do CI
+saíram todos da validação. Esta seção é a única leitura, feita com o modelo já escolhido e
+sobre o **artefato promovido** (`b8109cce…`) — o objeto que a API serve, não um irmão
+retreinado com o mesmo código.
+
+```
+PR-AUC          : 0.6496   (piso 0.2654 = modelo sem informação; IC95 [0.5960; 0.7016])
+                  validação 0.6646  ⇒  gap val−teste +0.0150
+ROC-AUC         : 0.8495   (piso 0,5000)          Brier : 0.1352  (validação 0.1339)
+recall@10%      : 0.286   (75,9% do teto estrutural, lift 2,86×)
+recall@20%      : 0.519   (68,8% do teto estrutural, lift 2,59×)
+limiar 0,29     : precisão 0.5287 · recall 0.7647 · F1 0.6251
+                  TP 286 · FP 255 · FN 88 · TN 780
+custo do erro   : R$ 32.882 (modelo) × R$ 72.556 (não abordar ninguém) × R$ 64.170 (abordar todos)
+```
+
+Registro em `docs/resultado-teste-final.json`; figuras em `docs/figuras/`.
+
+### 🎯 O achado: o IC95 é 18,5× maior que a distância entre os seis candidatos
+
+O intervalo de bootstrap da PR-AUC tem **0,1056** de largura. Os seis finalistas das Etapas
+6-8 cabiam em **0,0057**.
+
+> 🔑 **O empate técnico nunca foi indecisão de método — é a resolução da amostra.** Com 1.409
+> linhas e prevalência de 26,5%, **nenhum** conjunto de teste deste tamanho poderia desempatar
+> LogReg, HGB e MLP: a diferença entre eles é dezoito vezes menor que a incerteza da própria
+> medição. Reportar 0,6496 sem o intervalo sugeriria uma precisão de quatro casas que o
+> tamanho da amostra não sustenta.
+
+É o mesmo instrumento do IC binomial da auditoria de fairness (§5g), aplicado à métrica
+principal: ele impede as **duas** leituras erradas simétricas — precisão falsa (*"o modelo
+tem 0,6496"*) e ceticismo fácil (*"caiu, então piorou"*).
+
+### O gap de 0,0150 — o que ele é, e o que ele não é
+
+As duas partições têm o **mesmo tamanho** (1.409) e a **mesma prevalência** (26,54%,
+estratificada), então a diferença não vem de composição. Duas causas se somam, e nenhuma
+delas é degradação do modelo:
+
+1. **Sorteio.** ±0,05 de IC95 sobre um número absorve 0,0150 sem esforço.
+2. **Viés de seleção**, já medido neste projeto com grupo de controle na Etapa 7: o campeão
+   foi eleito **por ser o melhor na validação** entre seis candidatos separados por 0,0057 —
+   e o vencedor de uma disputa dentro do ruído tende a cair quando muda o conjunto. É a mesma
+   mecânica que lá produziu um excedente de −0,0126 para uma grade de 40 candidatos.
+
+🔑 **O que se pode afirmar:** *o desempenho em dados nunca vistos é compatível com o medido na
+validação*. O que **não** se pode afirmar é qual das duas causas pesou mais — para isso seria
+preciso um segundo conjunto de teste, que não existe. *Atribuir a uma causa a diferença que
+tem duas* é armadilha catalogada neste projeto desde a Etapa 8; ela vale aqui também.
+
+### 🚨 A métrica agregada caiu e a operacional SUBIU
+
+| | validação | teste |
+|---|---|---|
+| PR-AUC (seleciona) | 0,6646 | **0,6496** ↓ |
+| recall@10% (reporta o valor operacional) | 0,278 (73,8% do teto) | **0,286** (75,9%) ↑ |
+| recall@20% | 0,516 | **0,519** ↑ |
+| ROC-AUC | 0,8472 | **0,8495** ↑ |
+
+A hierarquia de três níveis declarada na Etapa 0 existe exatamente para este caso: **PR-AUC é
+uma integral sobre todos os limiares, inclusive sobre a faixa em que a campanha nunca vai
+operar**; `recall@k` mede o ponto onde a decisão acontece. O nível que paga a conta não seguiu
+o nível que seleciona — e a campanha de 10% da base captura **mais** churners no teste do que
+capturava na validação.
+
+⚠️ Nenhuma das duas variações é grande o bastante para ser lida como efeito: as duas cabem no
+IC. O que a tabela demonstra não é "melhorou", é **que as perguntas são diferentes**.
+
+### 🚨 O piso do gate é 0,66 e o teste deu 0,6496 — dito com todas as letras
+
+O gate do CI reprovaria este número, se fosse aplicado a ele. Não é, e a razão está escrita
+desde a Etapa 2: **o gate mede a validação**, porque um gate no teste toma uma decisão de
+promoção a cada push e converte o teste em validação depois de alguns deles.
+
+> **A tentação a nomear:** ajustar `GATE_PR_AUC_MIN` para 0,64 agora, "para ficar coerente".
+> Isso seria mover o limite **depois de ver o resultado** — a mesma negociação *post hoc* que o
+> pré-registro da Etapa 10.5 existe para impedir, e que o gate de fairness recusou fazer. O
+> piso continua onde estava, medindo o conjunto para o qual foi calibrado.
+
+O Brier, aliás, passa nos dois lugares (0,1352 no teste contra teto de 0,14) — o eixo de
+calibração atravessa a troca de conjunto sem se mover.
+
+### Por que só o campeão foi avaliado no teste
+
+Avaliar os seis finalistas aqui e publicar a tabela seria **usar o teste para comparar**, que é
+a mesma coisa que usá-lo para escolher com um passo a mais de negação. A comparação foi feita,
+está registrada com número nas §5b–5d, e foi feita no conjunto certo. O teste responde a uma
+pergunta só: *qual é o desempenho esperado do modelo que vai para produção?*
+
+### O mecanismo — a disciplina virou código
+
+`python -m src.reportar` **não recalcula nada** quando o registro existe: ele imprime o que foi
+medido. Recalcular exige `--reexecutar`, que **confere** contra o registro em vez de
+substituí-lo (verificado: reproduz em todos os eixos). E um teste da suíte amarra o número
+publicado ao artefato promovido — se alguém promover outro modelo sem re-tocar o teste, a suíte
+fica vermelha em vez de a documentação passar a descrever um objeto que não existe mais.
+
+🔑 *O teste é gasto pelo uso, e "não vou olhar de novo" não é um mecanismo — é uma intenção.*
+
+### A conta de negócio, fechada no conjunto de teste
+
+| estratégia | custo do erro por ciclo | contra o modelo |
+|---|---|---|
+| não abordar ninguém | R$ 72.556 | +R$ 39.674 (**+120,7%**) |
+| abordar a base inteira | R$ 64.170 | +R$ 31.288 (**+95,2%**) |
+| **modelo, limiar 0,29** | **R$ 32.882** | — |
+
+A segunda linha é a que sustenta a recusa de "otimizar recall puro": a solução degenerada
+captura 100% dos churners **e custa quase o dobro**. Números reais do conjunto que ninguém
+usou para decidir nada.
+
+---
+
 ## 7. Limitações conhecidas
+
+*(preenchida na Etapa 11. Regra usada para montar a tabela: **uma limitação só entra se alguém
+puder verificá-la** — cada linha aponta para a medição, a seção ou o arquivo em que ela aparece.
+O que não foi feito está escrito como não feito; um ❌ justificado vale mais que um ✅ inventado.)*
+
+### 7a · Dados — o que o dataset não permite
 
 | Limitação | Impacto | Mitigação possível |
 |---|---|---|
-| | | |
+| **O Telco é um retrato, sem eixo temporal** (§0) | não há split temporal: o modelo é validado sobre uma foto, e não sobre "treinar no passado, prever o futuro". Toda a política de retreino repousa num pressuposto de estabilidade que este dado não pode confirmar | base transacional com data de evento ⇒ split temporal e *backtesting* por safra. Sem isso, a validação superestima o desempenho sob deriva |
+| **A janela cega do ground truth (~60 dias) é PRESSUPOSTO, não medição** (§5f/10d) | é o número que estrutura a política de retreino inteira — e ele foi assumido (dois ciclos de faturamento + carência), não observado | medir a distribuição real do atraso entre predição e desfecho na base transacional; a política já está escrita para receber esse número no lugar do assumido |
+| **Nenhum dado comportamental de uso ou de contato com suporte** (§1) | é o bloco mais preditivo em churn de telecom, e ele simplesmente não existe na base. A Etapa 4 mediu o corolário: *feature engineering não cria informação, só reorganiza a existente* — as 4 features derivadas não deram ganho porque não havia o que derivar | integrar consumo, chamadas ao suporte, reclamações e tickets. É a mudança com maior retorno esperado do projeto — maior que qualquer troca de algoritmo medida nas Etapas 6-8 |
+| **Geográficas fora das features** (`City`, `Zip Code`, `Lat/Long` — §1) | perda de sinal potencial (cobertura, concorrência local). Decisão dupla: 4,3 clientes por CEP torna a cardinalidade inviável, **e** o CEP é proxy de renda/raça | agregação por região com volume suficiente, auditada por fairness antes de entrar. Ficou como experimento controlado no backlog, não como omissão |
+| **`Churn Score` e `CLTV` da IBM fora do treino** (§1, §5) | descarta o preditor mais forte da base — e é deliberado: o `Churn Score` tem **zero exceções em 1.409 linhas** (nenhum não-churner acima de 80, nenhum churner abaixo de 65), ou seja foi calculado com o desfecho conhecido. Usá-lo seria prever o modelo da IBM, não churn | nenhuma: a coluna é gabarito vazado. O `CLTV` segue em uso legítimo **fora do treino**, ordenando a fila por `P(churn) × valor` |
+| **11 clientes com `Total Charges` vazio** (tenure 0) | são o cliente do primeiro mês — a população que a campanha mais quer pontuar, e a que a API chegou a **recusar com 422** até a 9e encontrar o defeito com dado real | já corrigido (§5e/9e), e o caso virou teste. Fica registrado porque a classe de erro reaparece a cada contrato novo: *contrato escrito à parte do objeto que ele descreve* |
+
+### 7b · Modelo — o que o número não diz
+
+| Limitação | Impacto | Mitigação possível |
+|---|---|---|
+| **PR-AUC 0,6646 é um ranking bom, não um oráculo** (piso 0,2654) | 2,5× o piso da métrica, e mesmo assim o `recall@10%` é **0,278** — de cada 100 churners, a campanha de 10% da base alcança 28. O teto estrutural desse ponto é 0,377, então o modelo está a 73,8% do máximo **possível**, não a 27,8% do desejável | mais features (7a) move o teto de desempenho; **nenhuma mudança de algoritmo move**, e isso está medido em três etapas independentes (6, 7 e 8) |
+| **Seis candidatos dentro de 0,0057 de PR-AUC**, contra desvio entre folds de 0,019–0,024 (§6) | a escolha do campeão **não é sustentada pela métrica** — ela se desloca para critérios não-métricos (interpretabilidade, custo operacional, 1-SE). Quem ler a tabela esperando um vencedor claro não vai encontrar | é resultado, não defeito: está declarado assim na §6 e é o que a regra 1-SE existe para resolver. O que o corrigiria de verdade é mais sinal, não mais busca |
+| **A rede neural não superou os modelos clássicos** (§5d) | o item de maior peso da avaliação (25%) produziu um resultado nulo. Ele é **demonstrado**, não alegado: controle positivo em `make_moons` (+9,93 pp onde há não-linearidade) contra −0,31 pp no Telco, mesmo desenho | nenhuma — a conclusão (*o sinal é essencialmente linear no logit*) tem quatro medições independentes. Com dados comportamentais (7a), vale retestar: a rede está versionada e roda com um comando |
+| **O ganho do tuning foi exatamente zero** (§5c) | o default do sklearn já era o pico da grade de 18 configurações. Pré-registrado antes de medir, isso é previsão confirmada; sem o pré-registro seria desculpa | — |
+| **Todas as métricas são OFFLINE** | não existe conversão observada da campanha de retenção: a cadeia KPI usa uma taxa de conversão **assumida** para converter FN/FP em reais. O R$ 31.750 por ciclo é uma estimativa condicionada a esse número, não um valor medido | A/B com grupo de controle em produção — que é exatamente o que a política de retreino (§5f/10d) exige para medir o modelo limpo. Fora do escopo de implementação, dentro do escopo da política |
+| **Feedback loop não observável no escopo** | a campanha muda o rótulo de quem o modelo acertou, e o modelo é penalizado por ter acertado. Sem grupo de controle, a próxima safra de rótulos descreve um mundo que o próprio modelo alterou | fatia dos preditos que **não** recebe campanha. Está escrito na política e **não** implementado — não há produção real onde implementá-lo |
+
+### 7c · Operação — o que o plano gratuito e o escopo impõem
+
+| Limitação | Impacto | Mitigação possível |
+|---|---|---|
+| **API sem autenticação**, decisão registrada (§5e, item 102) | qualquer um com a URL pontua clientes. É API interna, sem frontend e sem usuários — e a limitação está **declarada**, não esquecida, com o custo de fechá-la já medido: **+0,329 ms** por requisição e ~25 linhas (API Key, `secrets.compare_digest`, chave por env var obrigatória) | implementar quando houver consumidor real. O ponto medido é que implementar depois custa o mesmo que implementar agora |
+| **Sem rate limiting no processo** — de propósito (M04-A05/A08) | o teto de lote (`max_length=5.000`, 422 antes de tocar o modelo) contém o pior caso por requisição, mas não há cota por origem | mora no ingress/API Gateway/Redis, nunca no processo: medido, um limitador em memória perde o efeito ao escalar (60 concorrentes, limite 10 ⇒ passaram 31 com 4 workers), **nunca esquece um IP** (804,7 MB para 1 milhão de origens) e derruba a própria probe do orquestrador |
+| **HTTPS termina no proxy da plataforma**; sem CORS, sem WAF, sem gerenciador de segredos | a aplicação fala HTTP na rede interna. CORS desabilitado é decisão (comunicação server-to-server), não omissão | infraestrutura de plataforma paga. ⚠️ Se um frontend entrar: **nunca** `allow_origins=["*"]` com `allow_credentials=True` — medido, o Starlette ecoa a origem do atacante |
+| **Plano gratuito: 512 MB · 0,1 CPU · dorme em 15 min** | **cold start ≈ 30 s** — risco de **entrega**, não de operação (gravar a demonstração com a API dormindo trava no primeiro `curl`). E `--workers 1`, porque o nº de workers sai da RAM (171,2 MiB por worker) e não da vazão | plano pago ou VM. A imagem é portátil por construção: trocar de destino não reescreve a aplicação |
+| **Latência de produção medida no cliente: p50 254 ms / p95 670 ms** (Brasil→Oregon) contra **1,16 ms** no cronômetro da própria API | 219× de diferença, e as duas leituras estão certas: o que sobra é rede e plataforma. Um SLA escrito sem o **ponto de medição** seria violado sempre ou nunca | região mais próxima e plano pago atacam a rede; nada disso é problema de modelo, e a **ação** do alerta manda confrontar as duas leituras justamente para não retreinar por causa de latitude |
+| **Monitoramento offline, por script** — e o argumento é de arquitetura, não de escopo | Prometheus é modelo **pull** e o plano gratuito **escala a zero**: manter o scrape impede o serviço de dormir (que é o que o torna gratuito), deixá-lo dormir enche a série de buracos que disparam alerta de indisponibilidade toda noite — fadiga de alerta por construção. A própria M04-A08 escreve, sobre esse alerta noturno, *"no nosso caso isso é normal"* | stack de observabilidade (OTel/Prometheus/Grafana) sobre infraestrutura que não hiberna. É o padrão da indústria; o que não se sustenta é rodá-lo **sobre esta** arquitetura |
+| 🚨 **O `simulate_drift.py` não roda contra produção** | no PaaS o stdout pertence à plataforma e não há como lê-lo de volta programaticamente. A detecção de drift é demonstrada **localmente**, sobre logs locais | coletor de logs (Datadog, Loki, S3) ou banco de inferências. É a terceira camada do *"quem lê este arquivo?"* cobrando na direção contrária: *o log fácil de emitir é o mesmo difícil de recuperar* |
+| **O detector de drift é UNIVARIADO** (PSI/KS coluna a coluna) | cego ao caso em que nenhuma coluna mudou sozinha mas a **combinação** virou inédita. A própria simulação demonstra o limite: somando 12 meses a `tenure` sem mexer em `total_charges`, o segundo fica em PSI 0,034 (estável) enquanto o primeiro vai a 3,59 | `IsolationForest` treinado no treino e aplicado à janela, com a fração de anômalos ao lado do PSI (item 110 do backlog). Um detector de data drift é, por natureza, um modelo não supervisionado |
+| **Rollback declarado e NÃO testado** (§5f/10e) | não há versão ruim em produção para reverter, e fabricar uma custaria um ciclo de deploy sem ninguém observando. Onde o teste era possível ele foi feito — gate, healthcheck e baseline foram **verificados reprovando** | ensaio de rollback numa janela combinada. A ausência está escrita porque um ✅ inventado aqui é pior que o ❌ |
+| **Sem Model Registry persistente no CI** (job 3 omitido, §9.5) | a linhagem existe por outra via — `commit_hash()` + `sha256_dataset()` + `sha256` do artefato + versão do sklearn gravada dentro dele —, mas não há alias `Staging`/`Production` a trocar | tracking server externo (`MLFLOW_TRACKING_URI` por secret). O job foi omitido **com os dois bloqueios comentados dentro do YAML**: `mlruns/` morre com o runner, e escrever o job antes disso produziria um CI que declara sucesso sem ter feito nada |
+| **O pacote ainda não é instalável** (`pip install .`) e o pacote de topo se chama `src` | `PYTHONPATH` aparece em três lugares (Dockerfile, alvo do Makefile, scripts fora da raiz), e um nome genérico colide entre projetos | item 17/9g — é trabalho do Módulo 05. Vale registrar que o campeão **não** depende disso: nenhum `FunctionTransformer` entrou nele, e há teste que carrega o artefato **sem o repo no `sys.path`** |
+| **Artefato 8,3 KB × imagem 510 MB = 1 : 61.000** | promover um modelo novo republica 61 mil vezes mais bytes do que a mudança real | artefato em volume ou registry, servido por download no boot. Não construído agora **de propósito**: no plano gratuito não há volume, e a alternativa seria retreinar no container — o que exigiria o dado bruto (LGPD) dentro de uma imagem publicável |
+
+### 7d · Governança — o que ficou aceito, e por quem
+
+| Limitação | Impacto | Mitigação possível |
+|---|---|---|
+| 🚨 **Disparidade de recall de 58,89 pp em `Dependents`**, aceita e declarada (§5g) | de cada 100 clientes com dependentes que iam cancelar, o modelo marca **22** (contra 81 no outro grupo). A causa é aritmética — prevalência 7,01% × 32,47% sob limiar global —, o que **não isenta**: o efeito sobre a pessoa é o mesmo | as três saídas estão medidas: limiar por grupo (6,33 pp, +R$ 2.918/ciclo) resolve mas é *disparate treatment* e **exige dono jurídico que o projeto não tem**; remover a coluna atenua para 13,20 pp e **reprova o gate** (PR-AUC 0,6427). O que falta não é técnica, é autoridade para decidir |
+| **O CI não barra a disparidade** — de propósito | um `assert disparidade <= 0.10` reprovaria o modelo em produção a cada push, e a saída praticada seria afrouxar o número até o verde. O CI **caracteriza** os quatro valores (±1e-4, bilateral) e impede que alguém remova as demográficas das features | quando houver decisão de negócio sobre a mitigação, o piso volta como piso. Enquanto não houver, quem carrega o compromisso é o Model Card, e a limitação está escrita **nos dois lugares** |
+| **A auditoria de fairness cobre 4 atributos**, todos do próprio dataset | raça, renda e escolaridade não existem na base — e são exatamente os eixos em que proxies geográficos costumam morder | dados demográficos consentidos, ou auditoria por proxy declarada. Registrar a ausência é o que impede ler "quatro atributos auditados" como "auditado" |
+| **Sem DPIA, sem base legal validada juridicamente** | a base legal assumida é legítimo interesse (§10.5d); ninguém do jurídico validou | avaliação de impacto formal antes de uso real. O RACI do Model Card já diz **quem faria** cada papel num contexto real — o projeto é solo e isso está dito |
+| **A predição é apoio à decisão, com humano no meio** — e isso é requisito, não limitação técnica | se alguém automatizar a ação sobre a fila, o desenho inteiro (LGPD Art. 20, revisão humana, usos proibidos do Model Card) deixa de valer sem que nada no código mude | os *usos NÃO pretendidos* estão escritos no Model Card, que é o lugar onde essa fronteira é verificável |
 
 ---
 
 ## 8. Reprodutibilidade
 
-- **Seeds fixadas:**
-- **Versões de biblioteca:** (`requirements.txt` / `uv.lock`)
-- **Versão/hash do dataset:**
-- **Comando para reproduzir do zero:**
+**A pergunta que esta seção responde:** *"alguém clona o repositório numa máquina limpa e chega
+ao mesmo número?"* — e a resposta tem de ser verificável, não declarativa.
+
+### O comando
+
+```bash
+git clone <repo> && cd tc-mle-fase1
+make setup      # cria o venv e instala as versões TRAVADAS (requirements.txt)
+make ci         # lint + 133 testes + gate: treina o campeão do bruto e mede na validação
+```
+
+`make ci` é o que o GitHub Actions roda, **na mesma ordem e com os mesmos binários** — os alvos
+invocam `.venv/bin/ruff` e `.venv/bin/pytest` por caminho explícito, nunca o nome solto. O motivo
+é um erro real: `make ci` rodado fora do venv chamou o `ruff` **global** (0.6.4 contra 0.16.2 do
+lock) e reportou 6 erros que o CI não vê. *Ferramenta de validação cujo resultado depende do
+ambiente do chamador não valida.*
+
+O gate **treina de ponta a ponta a partir do dado bruto** em vez de ler uma métrica salva: uma
+métrica lida de arquivo provaria apenas que o arquivo existe.
+
+### O que está fixado
+
+| Item | Valor | Onde |
+|---|---|---|
+| **Seed única do projeto** | `SEED = 42` | `src/config.py`; usada nas duas chamadas de `train_test_split`, no `random_state` de todo estimador, no `StratifiedKFold`/`RepeatedStratifiedKFold` e em `np.random.seed()` no topo de cada `main()` |
+| **Seed do PyTorch** | `torch.manual_seed(seed)` por execução, **≥5 seeds** na Etapa 8 | `src/mlp.py` — a seed é **fator do experimento**, não detalhe: comparar uma média (LogReg, determinística) com um sorteio seria comparar réguas diferentes |
+| **Partição** | 60/20/20 estratificado, derivado do índice do DataFrame | `src/data.py::dividir()` — duas chamadas, com a fração da segunda recalculada sobre o que sobrou |
+| **Dataset** | `Telco_customer_churn.xlsx`, sha256 `1bcbc0ccc9b352175216979102628e579cfbde2c3ff57b005de168a433122640` | versionado no Git (1,3 MB, imutável); `data.sha256_dataset()` recalcula e o valor vai como **tag do run do MLflow** e **dentro do artefato promovido** |
+| **Versões de biblioteca** | `requirements.txt` com **pins exatos** (`scikit-learn==1.9.0`, `numpy==2.4.6`, `pandas==2.3.3`) | gerado a partir de `requirements.in`; `requirements-serve.txt` é **derivado do mesmo lock**, não resolvido de novo |
+| **Python** | 3.12.5 no desenvolvimento · `python:3.12-slim@sha256:2c941e…` na imagem | tag é mutável, digest não. E a versão é **parte do contrato do artefato**: `src/artefato.py` compara a versão do scikit-learn gravada na promoção com a do ambiente e **mata o processo na carga** se divergirem |
+| **Plataforma da imagem** | `--platform linux/amd64` explícito no `make docker-build` | build no Apple Silicon produziria arm64 e o `exec format error` apareceria **no deploy**, não no build local que passou |
+| **Linhagem de cada run** | `commit_hash()` + `sha256_dataset()` como tags do MLflow | responde *"qual commit e qual snapshot de dados geraram este modelo?"*. O terceiro artefato de Sculley — o **ambiente** — está no artefato (`versoes_treino`) e no digest da base |
+
+### O artefato servido, identificado
+
+```
+artefato        : models/campeao.joblib   (8.306 → 10.398 bytes após a 10a-2)
+sha256          : b8109cce2efabbd8f15747019deed6b395e48913c97cdb4b5b0ef527f8e2e97d
+versao_modelo   : 1.0.0        modelo: logreg        features: 13
+limiar_operacao : 0.29
+promovido_em    : 2026-08-18T22:35:23+00:00     commit: dc77f2e
+dataset_sha256  : 1bcbc0ccc9b35217…
+ambiente        : python 3.12.5 · scikit-learn 1.9.0 · numpy 2.4.6 · pandas 2.3.3
+```
+
+O mesmo `sha256` é declarado pelo `GET /health`, ecoado em cada linha do log de inferência e
+verificável em produção com um `curl` — é o que torna a pergunta *"o que está servindo é o que
+foi avaliado?"* respondível em vez de presumida.
+
+### Como se sabe que reproduz — as três verificações
+
+1. **Determinismo medido, não suposto:** três execuções do pipeline completo produzem o **mesmo
+   hash** das probabilidades. É o que autoriza o teste de caracterização a fixar `|PR-AUC −
+   0,6646| ≤ 1e-4` — a tolerância existe para troca de biblioteca, não para ruído de execução.
+2. **Round-trip do artefato, bit a bit** (`np.array_equal`, não `approx`): treinar → salvar →
+   limpar da memória → recarregar → as predições batem exatamente. Serialização não é aproximação
+   numérica: diferença na décima casa significaria objeto **reconstruído** em vez de restaurado.
+3. **Reprodução em outro sistema operacional, verificada:** o mesmo artefato em macOS e em Linux
+   dá **PR-AUC idêntico nos 10 dígitos** (0,6646020519) e **0 decisões trocadas** no limiar, com
+   40% das linhas diferindo no último bit (4 ulps, BLAS). 🔑 As duas metades são o resultado:
+   reproduz o que decide, **e** proíbe que qualquer coisa rio abaixo compare predições por
+   igualdade exata.
+
+### O que a reprodutibilidade deste repositório NÃO cobre
+
+- **Não há DVC.** O dataset bruto é pequeno (1,3 MB) e **imutável**, então versioná-lo no Git
+  resolve o mesmo problema com menos peças; a linhagem que o DVC daria já vem do `sha256` gravado
+  no artefato e no run. É decisão justificada (M03-A02: *"Git para código e arquivos pequenos;
+  DVC/LFS para dados brutos volumosos"*), não omissão.
+- **`mlruns/` é local e não é versionado.** Os números das Etapas 3–8 são reproduzíveis pelos
+  comandos (`make comparacao`, `make tuning`, `make mlp`), mas o histórico de runs de quem
+  executou não viaja no clone. É a mesma pendência do registro no CI (§7c).
+- **O Dockerfile não é reprodutível; a imagem é.** A receita só repete o resultado porque **as
+  três** fontes de variação estão fixadas (base por digest, lockfile com pins, plataforma
+  explícita). Retirar qualquer uma delas produziria imagens diferentes em meses diferentes com o
+  mesmo `git checkout`.
 
 ---
 
@@ -2844,6 +3081,30 @@ Etapa 11.)*
 | 2026-08-17 | 9d | **Escopo declarado:** sem autenticação, `/docs` aberta, sem padrões GoF, sem log JSONL | limitação declarada vale mais que omissão; `/docs` publica a descrição do modelo, não dado pessoal; padrão que não paga é patternitis; o log é Etapa 10, e o `request_id` já é o gancho |
 | 2026-08-17 | 9d | 🚨 **Nenhum `app = criar_app()` de módulo: o uvicorn recebe a FACTORY** (`--factory`) | erro cometido e pego pelo CI: o objeto de módulo tornava a carga do artefato **efeito colateral do import**, e a suíte inteira falhava na coleta no runner limpo (`models/` vazio por decisão) enquanto `make ci` local passava. 🔑 *O defeito só existe onde o arquivo não existe* — nenhuma execução local podia encontrá-lo |
 | 2026-08-17 | 9d | `config.ARTEFATO` configurável por **`TC_ARTEFATO`**, com teste de import em subprocesso | traz o defeito acima para dentro do alcance do desenvolvimento (simula a máquina limpa) e é o que o container vai querer de qualquer forma, quando o artefato vier de um volume |
+| 2026-08-18 | 9f | **`.dockerignore` escrito ANTES do Dockerfile, e como allowlist** | 🚨 o Docker **não lê** o `.gitignore`. Medido construindo de propósito com `COPY . .` e sem exclusão: contexto **1,5 GB** → imagem **2,03 GB**, com o `.xlsx` de 7.043 clientes reais, o `mlruns/` e o `.venv` de binários **arm64 de macOS** dentro. Camada Docker é imutável — `RUN rm` posterior não apaga da camada anterior ⇒ é exposição de dado pessoal por imagem publicada, não peso. E allowlist porque *denylist protege contra o que já existe; allowlist protege contra o que ainda vai existir* |
+| 2026-08-18 | 9f | Base por **digest** + lockfile com pins + `--platform linux/amd64` explícito | 🔑 *o Dockerfile é a receita; a imagem é o artefato* — só a imagem é reprodutível por construção. `python:3.9-slim` (o da aula) **não constrói** este projeto: `scikit-learn 1.9.0` exige `>=3.11`. Essa falha alta só existe **porque** há pins; sem eles o pip acharia versões antigas, a imagem subiria e o artefato quebraria só na carga. E build no Apple Silicon produz arm64 ⇒ `exec format error` no deploy, não no build local que passou |
+| 2026-08-18 | 9f | `requirements-serve.txt` **derivado do lock existente**, não resolvido de novo | imagem de serviço **510 MB** contra venv de **1.400 MB**; `torch` sozinho tem **1.057 MB** — o dobro da imagem inteira — e o campeão não o importa em lugar nenhum (*código ≠ dependência*: o perdedor fica versionado e fora do runtime). Derivar do lock faz a divergência de versão do sklearn — que `src/artefato.py` mata no boot — ser **impossível** em vez de detectável |
+| 2026-08-18 | 9f | `--workers 1` e `HEALTHCHECK` exigindo `status == "pronto"` | o nº de workers sai da **RAM**, não da vazão: o container mede 171,2 MiB ⇒ 4 workers ≈ 685 MB contra o teto de 512 MB. E o healthcheck foi **verificado reprovando em três cenários** — serviço real exit 0, porta morta exit 1, e **um servidor que responde 200 com `degradado` exit 1**: só o terceiro distingue prontidão de "a porta abriu" |
+| 2026-08-18 | 9f | Artefato **versionado como exceção NOMEADA** (`!models/campeao.joblib`, 8.306 B) | a plataforma de deploy builda a partir do **clone do Git**, sem máquina nossa no caminho e sem volume no plano gratuito: ou o artefato está versionado, ou a imagem sobe sem modelo. É o arquivo, nunca `!models/*` — nomear impede o próximo `.joblib` experimental de entrar de carona. 🔑 *Exceção declarada com motivo é decisão; exceção silenciosa é a regra apodrecendo* |
+| 2026-08-18 | 9e | 🚨 **O teste de integração manda as 1.409 linhas REAIS da validação**, não payload sintético — e foi isso que achou o defeito | a linha 487 tomou **422 da própria API**: um dos 11 clientes com `Total Charges` vazio (todos com `tenure = 0`, sem ciclo de faturamento), que o pipeline sempre soube pontuar (0,2449). *O contrato ficou mais **estreito** que o pipeline que ele protege* — erro simétrico do `-999`, mesma raiz: contrato escrito à parte do objeto que descreve. **Consequência de negócio: a API recusava exatamente a população que a campanha mais quer pontuar** |
+| 2026-08-18 | 9e | A correção do vazio tem **duas peças, e nenhuma serve sozinha**; e `Tenure Months: null` continua 422 de propósito | `null` aceito só onde o grupo `zero` do `ColumnTransformer` declara tratamento (de novo o artefato decidindo), **mais** `None → np.nan` no serviço: sem a segunda peça o 422 vira **500**, porque `pd.DataFrame` com `None` vira `dtype=object` e o LogReg levanta `ValueError`. A assimetria é deliberada: em `Total Charges` o vazio *significa* algo; em `Tenure` seria a sentinela de nulo entrando pela porta da frente |
+| 2026-08-18 | 9e | `/health` separado em **`versoes_treino` e `versoes_runtime`** | dentro da imagem o campo dizia Python **3.12.5** (carimbo do treino) enquanto o processo rodava **3.12.14**. Nada errado no artefato — o **rótulo** respondia a outra pergunta, no endpoint cuja pergunta é *"o que este serviço tem?"*. 🔑 *Campo ambíguo é pior que campo ausente: parece resposta* |
+| 2026-08-18 | 9e | 📏 **macOS × Linux: 40% das linhas diferem em até 4 ulps, 0 decisões trocadas, PR-AUC idêntico nos 10 dígitos** | as duas metades importam: não muda nenhuma decisão de negócio nem move a métrica reportada, **e** proíbe que qualquer coisa rio abaixo compare predições por igualdade exata (cache por hash, deduplicação, reconciliação do log da Etapa 10). Mesma lição do lote × unitário, agora entre sistemas operacionais |
+| 2026-08-18 | 9f-quater | **Destino = PaaS (Render)**; FaaS descartado **por medição**, IaaS por custo de administração | o fechamento transitivo de serviço tem **253,2 MB** contra o limite de **250 MB** do Lambda por zip — estoura por 1,3% **antes** do adaptador e do artefato. *O que não cabe na função serverless não é o modelo (8,3 KB), é o que ele precisa para existir.* E a portabilidade da imagem é a resposta a *"e se quisesse trocar de nuvem?"*: trocar de destino não reescreve a aplicação |
+| 2026-08-18 | 9f-quater | 🚨 **Declarar `PORT: 8000`** — revertendo a omissão que fora deliberada | a porta foi deixada em branco *de propósito* (*"é parâmetro que a plataforma reivindica"*) e o resultado foi **48% das requisições com `x-render-routing: no-server`**, com a aplicação respondendo 200 a tudo que lhe chegava e zero restarts: `EXPOSE 8000` contra processo em `${PORT:-8000}` = 10000, e a plataforma *detectando* qual era (a doc dela diz *"usually able to detect"*). Declarado ⇒ **120/120**. 🔑 *Não declarar não é delegar: delegar é declarar o valor que ela usa* |
+| 2026-08-18 | 9f-quater | **`autoDeployTrigger: checksPass`** no `render.yaml` | o default do PaaS é redeploy a cada push — *entrega contínua **sem** integração contínua*, publicando o que o `make ci` ainda não aprovou. Uma linha põe o gate do CI no caminho, sem webhook e sem secret; verificado funcionando (o commit da correção de porta só implantou depois do CI verde). ⚠️ Consequência a conhecer: commit **sem check nenhum não é implantado**, em silêncio |
+| 2026-08-18 | 9f-quater | Verificação final: **o mesmo script da 9e rodado contra a URL pública** | PR-AUC **0,6646020519** local × **0,6646020519** na nuvem, **0 decisões trocadas** no limiar. Custou zero porque o script já recebia o alvo por variável de ambiente — *escrever o teste parametrizável desde o começo é o que permite reusá-lo no ambiente que importa*. Latência Brasil→Oregon com 0,1 CPU: unitário p50 254 ms / p95 670 ms; `/health` sobreviveu a 8 lotes de 1.409 em voo |
+| 2026-08-18 | 10a | Log JSON (uma linha por requisição, stdout) com os 6 campos canônicos **+ `artefato_sha256`** | ter `model_version` na resposta não basta: a resposta é efêmera e o log é o rastro de auditoria. Sem o hash, quando o PSI cruzar o limiar daqui a três semanas não se consegue descartar *"trocaram o artefato no meio da janela"* — e as duas explicações são indistinguíveis |
+| 2026-08-18 | 10a | 🚨 **Máscara LGPD em dois níveis:** `scores` sempre, `features` só com `TC_LOG_FEATURES=1` | as duas famílias de drift têm custo de privacidade **oposto**: prediction drift é número sem atributo ao lado (não identifica ninguém ⇒ vigilância de graça rodando na nuvem); data drift custa `Gender`/`Senior Citizen`/`Partner`/`Dependents` no stream de um **terceiro**. 🔑 O `.gitignore` protege o repo e o `.dockerignore` protege a imagem — **nada protege o stdout do container**, e as duas primeiras são regras de exclusão que a terceira não pode ter, porque logar é a finalidade. *Onde não se pode excluir, decide-se o que se escreve* — antes da primeira linha, porque log emitido não volta |
+| 2026-08-18 | 10a | `--no-access-log` no `CMD` | o uvicorn tem log de acesso próprio: medido, 3 requisições davam **3 linhas JSON + 3 de texto puro**, e o consumidor do `.jsonl` é código. `logger.propagate = False` não resolve — o emissor é outro processo lógico |
+| 2026-08-18 | 10a | 🚨 Dois defeitos que **só aparecem para teste que olha o conteúdo da linha** | (a) o handler de `Exception` do FastAPI roda **por fora** do middleware ⇒ ler `resposta.status_code` perderia **toda falha interna** no log; (b) `StreamHandler` **congela o stream na construção** ⇒ sob pytest a linha ia para um descritor que nem `capsys` nem `capfd` liam, e um teste *"respondeu 200, logo logou"* ficaria **verde sem nunca ter visto uma linha**. Verificado reprovando em 3 sabotagens |
+| 2026-08-18 | 10a-2 | **Estatísticas de referência DENTRO do artefato**, não num JSON ao lado | mesmo argumento do limiar: a distribuição de referência é propriedade **daquele modelo**, não do repositório. Um arquivo ao lado recria o par *"dois arquivos que podem não combinar"*, e nesta variante a falha **não falha** — baseline de um modelo contra predições de outro mede drift fantasma. 🔑 O argumento decisivo é operacional: guardando **proporções por bin** (não dados), o baseline roda **no container sem o dataset**, que é justamente o que não pode estar lá |
+| 2026-08-18 | 10a-2 | Congelar **três** coisas: estatísticas, **bordas dos bins** e a distribuição das **saídas** | PSI com bins recalculados na janela compara duas escalas e a régua `<0,10/0,25` deixa de valer; bins **abertos nas pontas** porque produção tem valor fora do intervalo do treino — e binning fechado faria a janela mais deslocada dar o PSI mais tranquilo. 🚨 **Furo próprio, achado no meio da execução:** a 1ª versão congelou só `P(X)`, e como as features só vão ao log com a flag e os `scores` vão **sempre**, havia baseline para a vigilância que quase nunca roda e **nenhum** para a que sempre roda |
+| 2026-08-18 | 10a-2 | O baseline de scores sai da **VALIDAÇÃO**, não do treino | in-sample o modelo é otimista, e baseline otimista faz produção parecer deslocada **para sempre** — drift fantasma permanente, que treina o time a ignorar o alerta. Medido aqui: PSI treino×validação = 0,0022, ou seja o erro sairia barato *neste* modelo regularizado; não sairia num HGB profundo |
+| 2026-08-18 | 10a-2 | 🚨 A verificação do risco previsto **inverteu o risco** ⇒ 4ª checagem na carga | esperava-se que a chave nova recusasse artefato antigo; `carregar(estrito=True)` não valida o conjunto de chaves (tudo é `.get`), então o risco real era o **oposto**: artefato **sem** baseline carregando em silêncio e a falha aparecendo semanas depois como **ausência de alerta** — indistinguível de ausência de problema |
+| 2026-08-18 | 10c-bis | **Drift fabricado em dois cenários**, com o detector verificado disparando | drift real leva meses e um TC de seis semanas nunca veria um: em vez de esperar, fabrica-se — e o que se testa não é o modelo, é o **sistema de vigilância**. Dois porque as duas famílias se movem independentes: reajuste ×1,15 ⇒ data drift **1,49 (agir)** com prediction drift **0,03 (estável)**; tenure +12 ⇒ as duas acusam **e a fila encolhe 37%** (tenure alto = menos churn) 🚨 *o alerta chega vestido de boa notícia* |
+| 2026-08-18 | 10c-bis | 🎯 **Achado que inverte a premissa do enunciado:** categoria inédita **não passa silenciosa** nesta API | o schema é derivado do artefato (`Literal[tuple(ohe.categories_)]`) ⇒ **422 antes de tocar o modelo**, em vez do tudo-zero silencioso que o `OneHotEncoder` produziria. Nesta arquitetura, categoria nova é evento de **serviço**, não de drift: o detector certo é **alerta de taxa de 4xx**, e ele dispara na **primeira** requisição em vez de ao fim de uma janela |
+| 2026-08-18 | 10c-bis | ⚠️ As três limitações da simulação escritas junto — e a terceira vale mais que o script | (1) é **covariate shift**, detectável *por construção*, porque foi construído — não simula concept drift; (2) KS com amostra grande acusa qualquer coisa ⇒ decidir por **PSI**, magnitude e não p-valor; (3) 🔑 o deslocamento é univariado **e o detector também**: somar 12 meses a `tenure` sem mexer em `total_charges` cria clientes com dois anos de casa e a fatura de um — combinação que **não existe no mundo** — e `total_charges` fica em PSI 0,034 (estável) enquanto `tenure` vai a 3,59. *A simulação também mostra o limite do detector, não só o poder dele* |
 | 2026-08-19 | 10b | **Banda morta em todo alerta: dois limiares (gatilho e desarme) + persistência de janelas**, e não um limiar único | um limiar oscila em torno de si mesmo e cada oscilação consome um ciclo de investigação. 🔑 A régua do PSI (`<0,10 / 0,10–0,25 / >0,25`) **já era** um termostato e ninguém a lê assim: as pontas viram gatilho e desarme, o meio vira zona morta. Mesma histerese da regra 1-SE, aplicada ao tempo |
 | 2026-08-19 | 10b | Limiares de drift **calibrados contra o ruído medido**, não copiados da regra de bolso | validação × treino (só ruído de partição) dá PSI **0,0128** ⇒ o gatilho de 0,25 está a **19,5×** desse piso e o de investigação a 7,8×. É *"observar a variabilidade normal antes de fixar o threshold"* com número em vez de intenção |
 | 2026-08-19 | 10b | **Toda taxa é escrita com denominador visível, e a janela é de VOLUME (`n ≥ 400`)**, não de tempo | `rate(5xx[5m]) > 0.05` (forma do material) é 5xx **por segundo**, não 5%: dispara com 3 erros/min e piora conforme o produto cresce. E sem carga real, janela por dia produziria decis de dois pontos — 400 é a janela em que os controles foram medidos |
@@ -2857,3 +3118,20 @@ Etapa 11.)*
 | 2026-08-19 | 10e | Passo obrigatório de **conferência de identidade** (`/health` → `artefato_sha256`) depois de cada camada do rollback | reverter e não conferir é o cenário da Knight Capital com outra roupa. Custa um `curl` porque o `/health` foi construído na 9d para responder isso |
 | 2026-08-19 | 10e | Blue-green e canary **descartados com motivo**; endpoint versionado (`/v1`) reconhecido como a estratégia que já estava feita | blue-green dobra o custo (plano gratuito e único) e não mede nada antes da comutação; canary exige roteador de tráfego. E canary sem teste de significância é 1% de tráfego produzindo uma decisão de 100% — o pecado do pico da grade, em produção |
 | 2026-08-19 | 10e | **Rollback declarado e NÃO testado**, dito com todas as letras | não há versão ruim em produção para reverter, e fabricar uma custaria um ciclo de deploy sem ninguém observando. Onde o teste é possível ele é obrigatório (gate, healthcheck, baseline — todos verificados reprovando); onde não é, a ausência é escrita |
+| 2026-08-19 | 10.5 | **Pré-registro commitado ANTES da primeira medição** (commit `9f8c596`) | o `git log` vira a prova da ordem, e ela deixa de ser uma afirmação minha no meio do texto. Custa um commit, e é a diferença entre *"o limite foi escrito antes"* e *"o limite foi escrito antes, veja o hash"* |
+| 2026-08-19 | 10.5 | Limite pré-registrado: **disparidade máxima de recall = 10 pp** em cada atributo sensível | limite escrito depois do resultado vira negociação *post hoc* (*"12 pontos tá ruim? dá pra viver"*). 🎯 **O placar ruim é o argumento: 3 das 4 previsões erraram** — se as quatro tivessem batido, a auditoria teria confirmado o que eu já achava e não teria produzido informação nenhuma |
+| 2026-08-19 | 10.5 | 🚨 **Achado: 58,89 pp de disparidade de recall em `Dependents`** (0,2174 × 0,8063) | *de cada 100 clientes com dependentes que iam cancelar, o modelo marca 22.* `Senior Citizen` (12,72 pp) e `Partner` (10,03 pp) também estouram; só `Gender` (8,16 pp) passa. A causa é **aritmética**, não defeito: prevalência 7,01% × 32,47% com limiar global — o teorema da impossibilidade em forma concreta. Não isenta: o efeito sobre a pessoa é o mesmo |
+| 2026-08-19 | 10.5 | **Auditar no limiar de OPERAÇÃO (0,29), nunca no 0,5** — e isso virou teste | medido: `Dependents` dá **58,89 pp** em 0,29 e **76,81 pp** em 0,5. São números sobre modelos diferentes, e só um deles existe. É o `.predict()` da Etapa 9i um andar acima: sai plausível, não falha, e descreve uma fila que ninguém corta |
+| 2026-08-19 | 10.5 | **IC binomial por grupo**, ao lado de cada recall | o pior achado é o de **menor amostra** (23 churners; recall 0,2174, IC95 [0,075; 0,437]). O IC impede as duas leituras erradas simétricas — precisão falsa e descarte fácil (*"são só 23 casos"*) — e o que fecha é o **limite superior continuar abaixo** de 0,8063: a incerteza não salva o resultado |
+| 2026-08-19 | 10.5 | ⚖️ **Decisão: manter o modelo e declarar**, com as três saídas medidas **antes** de decidir | manter (58,89 pp · PR-AUC 0,6646 · R$ 31.750) × **limiar por grupo** (6,33 pp · +R$ 2.918/ciclo · +109 na fila) × remover a coluna (13,20 pp · **PR-AUC 0,6427, abaixo do piso** ⇒ nem promovível). O limiar por grupo é tratamento explicitamente diferente por atributo protegido (*disparate treatment*): defensável como ação afirmativa, mas **exige dono jurídico** que este projeto não tem. Registrar o número, o preço da correção e quem deveria decidir é mais honesto que aplicar correção que ninguém autorizou |
+| 2026-08-19 | 10.5 | 🚨 **Correção ao catálogo, medida:** *fairness through unawareness* **atenua** — não é inócua | remover `Dependents` levou a disparidade de **58,89 → 13,20 pp**: o viés sobrevive nos proxies mas **enfraquece**, e o slogan corrente (*"remover a coluna não remove o viés"*) estava pela metade. O que mata a opção é o **preço** (reprova o gate de PR-AUC), não a inutilidade. ⚠️ Ressalva que vai junto: **um modelo pior tende a parecer mais justo** — no limite, um aleatório tem disparidade zero. *Métrica de fairness nunca se lê sozinha* |
+| 2026-08-19 | 10.5 | 🚨 **O gate de fairness NÃO barra os 10 pp — de propósito**; o CI caracteriza em vez de reprovar | um `assert disparidade <= 0.10` reprovaria **o modelo em produção a cada push**, e a saída óbvia seria afrouxar o número até o verde: exatamente a negociação que o pré-registro existe para impedir. *Gate que nasce violado não protege nada; ensina o time a editar o limite.* Com o piso conscientemente não atingido, entra o **contrato**: os 4 números caracterizados (±1e-4, bilateral) e um teste que falha se alguém remover as demográficas das features. A limitação — *nada aqui impede o modelo de continuar a 58,89 pp* — está escrita no Model Card **e** no teste |
+| 2026-08-19 | 10.5 | ⚠️ Erro de procedimento registrado: **`git checkout` não reverte arquivo untracked** | ao verificar os testes reprovando, a 1ª sabotagem continuou aplicada durante a 3ª e produziu 4 falhas onde devia haver 1 — e por um minuto pareceu que o teste estava mal escrito. 🔑 *O mecanismo de desfazer só funciona sobre o que o sistema já conhece.* Mesma família do `make ci` fora do venv: ferramenta de segurança cujo resultado depende de um estado que ninguém verificou |
+| 2026-08-19 | 11 | **Conjunto de teste tocado UMA vez**, com o **artefato promovido** (`b8109cce…`), não com um modelo retreinado | é o objeto que a API serve: comparar modelos treinando na hora é legítimo, *servir* não é, e **reportar segue o que serve**. PR-AUC **0,6496** (piso 0,2654), Brier 0,1352, recall@10% **0,286** (75,9% do teto), custo R$ 32.882/ciclo contra R$ 72.556 de não fazer nada |
+| 2026-08-19 | 11 | 🎯 **Achado: o IC95 de bootstrap tem 0,1056 de largura — 18,5× a distância entre os seis finalistas (0,0057)** | *o empate técnico das Etapas 6-8 nunca foi indecisão de método; é a resolução da amostra.* Com 1.409 linhas e prevalência 26,5%, **nenhum** conjunto de teste deste tamanho poderia desempatar LogReg, HGB e MLP. Reportar 0,6496 sem o intervalo sugeriria uma precisão de quatro casas que a amostra não sustenta — mesmo instrumento do IC binomial da §5g, agora na métrica principal |
+| 2026-08-19 | 11 | O gap validação→teste (**+0,0150**) é atribuído a **duas** causas e a nenhuma delas isoladamente | as partições têm o mesmo n e a mesma prevalência ⇒ não é composição. Somam-se **sorteio** (0,0150 cabe folgado no IC) e **viés de seleção** (o campeão foi eleito por ser o melhor na validação entre seis candidatos dentro do ruído). Separá-las exigiria um segundo conjunto de teste, que não existe — e *atribuir a uma causa a diferença que tem duas* é armadilha catalogada aqui desde a Etapa 8 |
+| 2026-08-19 | 11 | 🚨 **A métrica agregada caiu e a operacional subiu** — e as duas leituras estão certas | PR-AUC 0,6646 → 0,6496 enquanto `recall@10%` 0,278 → **0,286** e ROC-AUC 0,8472 → 0,8495. É a hierarquia da Etapa 0 valendo: PR-AUC integra sobre limiares em que a campanha **nunca vai operar**; `recall@k` mede o ponto onde a decisão acontece. ⚠️ Nenhuma das variações escapa do IC — o que a tabela mostra não é "melhorou", é que **as perguntas são diferentes** |
+| 2026-08-19 | 11 | 🚨 **O piso do gate (0,66) NÃO foi movido para acomodar o teste (0,6496)** | ajustá-lo "para ficar coerente" seria mover o limite **depois de ver o resultado** — a negociação *post hoc* que o pré-registro da 10.5 existe para impedir. O gate mede a **validação** por decisão registrada desde a Etapa 2, e é para ela que o piso foi calibrado. O Brier passa nos dois conjuntos (0,1352 ≤ 0,14) |
+| 2026-08-19 | 11 | **Só o campeão foi avaliado no teste** — os outros cinco finalistas, não | publicar a tabela dos seis no teste seria usá-lo para **comparar**, que é usá-lo para escolher com um passo de negação a mais. A comparação está feita, com número, nas §5b–5d, e no conjunto certo. O teste responde a uma pergunta só: *qual é o desempenho esperado do que vai para produção?* |
+| 2026-08-19 | 11 | A disciplina do toque único virou **mecanismo**, não intenção | `python -m src.reportar` não recalcula quando o registro existe (imprime o que foi medido); recalcular exige `--reexecutar`, que **confere** em vez de substituir (verificado: reproduz em todos os eixos); e um teste da suíte amarra o número publicado ao **sha256 do artefato promovido** ⇒ promover outro modelo sem re-tocar o teste deixa a suíte **vermelha**, em vez de deixar a documentação descrevendo um objeto que não existe mais |
+| 2026-08-19 | 11 | **Curva de ganho cumulativo com TRÊS linhas** (modelo · acaso · teto estrutural) como o gráfico principal da entrega | o teto `k/prevalência` é o que impede o gráfico de mentir: sem ele, um ranking a 75,9% do **máximo possível** parece fraco. E a curva não precisa de tradução — *"contatando 10% da base, a campanha alcança 28,6% de quem ia cancelar"* é frase que o negócio consome direto. Bônus do mesmo lote: histograma das probabilidades por classe verdadeira, que é o Brier em forma de figura |
