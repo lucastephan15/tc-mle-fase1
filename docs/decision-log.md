@@ -1254,6 +1254,145 @@ A refutada é a mais útil das seis: ela é a única que produziu um experimento
 
 ---
 
+## 5d-bis. Etapa 8-bis — o `MLPClassifier` do scikit-learn (25/08/2026)
+
+*Módulo: `src/mlp_sklearn.py` · testes: `tests/test_mlp_sklearn.py` · run MLflow
+`mlp-sklearn-etapa8bis`.*
+
+**Por que este experimento existe.** O enunciado da fase nomeia a implementação:
+*"treinar uma Rede Neural simples utilizando o **MLPClassifier** do Scikit-Learn"*. A Etapa 8 foi
+escrita em PyTorch, e o motivo estava registrado — o `early_stopping=True` do `MLPClassifier`
+pontua a validação interna com `accuracy_score`, está no fonte e a classe **não expõe `scoring`**.
+Era uma afirmação sobre código de terceiro, defendida por leitura. Este módulo a **mede**, e de
+quebra cumpre o requisito com um número ao lado dos demais candidatos em vez de com uma
+justificativa.
+
+**Protocolo idêntico**, e isso não é retórica: mesmas 13 features, mesmo `construir_pipeline`
+(one-hot + padronização — verificado por teste que compara os transformadores um a um com os da
+LogReg), mesma CV estratificada repetida 5×3, mesma seed, `scoring="average_precision"`, mesma
+grade de arquitetura da Etapa 8 e mesmas 5 inicializações. `alpha` (a L2 do sklearn) espelha o
+`weight_decay` do Adam, com **1e-4 acrescentado por ser o default da biblioteca** — isto é, a
+configuração que o experimento teria se ninguém tivesse escolhido nada.
+
+### A grade — 20 configurações, 15 dobras cada
+
+| hidden | melhor PR-AUC (CV) | ±dp | gap treino−CV |
+|---|---|---|---|
+| `(8,)` | **0,6874** (α=0) | 0,0231 | **0,0241** |
+| `()` | 0,6845 | 0,0231 | **0,0033** |
+| `(16,)` | 0,6800 | 0,0203 | 0,0499 |
+| `(32,)` | 0,6696 | 0,0164 | 0,0885 |
+| `(16, 16)` | 0,6641 | 0,0227 | 0,0879 |
+| *LogReg (Etapa 6, mesma CV)* | *0,6904* | — | *0,0033* |
+
+🔑 **A coluna que vale mais é a do gap, e ela é monotônica na capacidade: 0,0033 → 0,0241 → 0,0499
+→ 0,0885.** Cada neurônio acrescentado foi inteiramente para dentro do treino. Não é que a rede
+tenha "falhado em aprender": ela aprendeu mais, e nada do que aprendeu a mais generalizou. É a
+mesma conclusão das Etapas 4, 6, 7 e 8 chegando por um quinto caminho — e o único em que o
+overfitting aparece **graduado**, não como um sim/não.
+
+🎯 **A regra 1-SE elegeu `hidden=()` outra vez.** Exatamente como na Etapa 8, com outra biblioteca,
+outro otimizador e outra inicialização: dentro do envelope de 1 erro padrão (0,6814), a
+configuração mais simples é a que não tem camada oculta nenhuma — a regressão logística. Duas
+implementações independentes desistiram da profundidade pelo mesmo critério.
+
+### O controle de profundidade zero — e uma réplica que não estava prevista
+
+| | PR-AUC (CV, 15 dobras) |
+|---|---|
+| LogReg do sklearn (LBFGS) | 0,6904 |
+| `MLPClassifier` `hidden=()`, α=0 (Adam) | 0,6845 |
+| **diferença** | **−0,0059** |
+
+🔑 **Isto é uma réplica do achado nº 2 da Etapa 8, com implementação diferente.** Lá, o controle de
+profundidade zero em PyTorch ficou −0,0067 abaixo do baseline, e o terceiro modelo decompôs a
+diferença em **−0,0014 de orçamento de dados + −0,0053 de otimizador**. Aqui não há desconto de
+orçamento (o early stopping está desligado), e o que sobra é o otimizador: **−0,0059**, contra os
+−0,0053 previstos pela decomposição. *Duas implementações de Adam, escritas por equipes diferentes,
+custam a mesma coisa em relação ao LBFGS.* A decomposição da Etapa 8 era uma conta feita com um
+modelo construído para o fim; esta é uma medição independente que chega a 0,0006 dela.
+
+### 🚨 O custo do `early_stopping` que pontua por acurácia — medido, enfim
+
+A configuração é a mesma (`(8,)`, α=0), as seeds são as mesmas, os dados são os mesmos. Muda uma
+palavra-chave:
+
+| | PR-AUC (CV) | PR-AUC (validação) | Brier | custo/ciclo | dispersão entre seeds |
+|---|---|---|---|---|---|
+| `early_stopping=False` | **0,6846** ± 0,0042 | **0,6655** ± 0,0054 | 0,1330 | **R$ 30.793** | ±0,0054 |
+| `early_stopping=True` | 0,6542 ± 0,0127 | 0,6378 ± 0,0191 | 0,1398 | R$ 32.631 | ±0,0191 |
+| **efeito** | **−0,0304** | **−0,0277** | +0,0068 | **+R$ 1.838** | **3,5×** |
+
+**−0,0304 de PR-AUC é mais de um desvio entre folds (0,0231).** E o número que decidiu a parada
+está gravado no próprio objeto: `best_validation_score_ = 0,8175` — que **é acurácia**, num
+problema cujo piso de acurácia é 73,46%. Duas réguas no mesmo treino: uma escolhe a época, a outra
+avalia o resultado.
+
+🔑 **O que a tabela acrescenta à leitura do fonte não é o sinal, é a ordem de grandeza — e a
+terceira coluna.** A dispersão entre seeds **triplica** quando o early stopping entra. Faz sentido
+no mecanismo: o critério de parada passa a depender de um split interno aleatório *e* de uma
+métrica de degrau (acurácia muda em saltos, e várias épocas empatam), então a época escolhida vira
+sorteio. *O default não só piora a média: ele torna o resultado menos reproduzível, que é o
+oposto do que se pede a um critério de parada.*
+
+⚠️ Registrar o que **não** se mediu: nada disso diz que `early_stopping` seja ruim em geral. Diz
+que **parar por uma métrica que não é a do projeto** custa isto aqui, neste problema. A versão em
+PyTorch para por PR-AUC e restaura os pesos da melhor época — foi para poder fazer as duas coisas
+que ela foi escrita.
+
+### 🚨 O resultado desconfortável: na validação, a rede do sklearn ficou marginalmente acima do campeão
+
+| | PR-AUC | Brier | custo/ciclo | R@10% |
+|---|---|---|---|---|
+| **Campeão (LogReg, 13 features)** | 0,6646 | 0,1339 | R$ 31.750 | 0,278 |
+| `MLPClassifier (8,)`, média de 5 seeds | **0,6655** ± 0,0054 | 0,1330 | R$ 30.793 | 0,283 |
+| diferença | **+0,0009** | −0,0009 | −R$ 957 | +0,005 |
+
+Quatro métricas apontando para o mesmo lado é o tipo de resultado que merece ser escrito **antes**
+de ser explicado. **A decisão é manter o campeão**, e os motivos são numéricos, não de preferência:
+
+1. 🔑 **Na métrica de seleção, o campeão ganha.** A hierarquia da Etapa 0 diz onde cada número
+   decide: a **CV no treino** seleciona (15 dobras, 4.225 amostras), a **validação** reporta. Na CV
+   é **0,6904 × 0,6874** — a favor da LogReg. Trocar a régua depois de ver a validação é o mesmo
+   pecado que a regra 1-SE existe para evitar, um andar acima.
+2. 📏 **A vantagem é menor que o sorteio que a produziu.** O desvio entre as 5 seeds é **±0,0054**,
+   seis vezes a diferença de 0,0009 — e a seed 2024 sozinha deu **0,6586**, isto é, 0,0060 **abaixo**
+   do campeão. *Qual dos dois "ganha" depende de qual inicialização for promovida*, e essa é a
+   definição de ruído.
+3. 📏 **O IC95 do conjunto de teste tem 0,1056 de largura** (Etapa 11) — **117 vezes** a diferença.
+   Nenhum conjunto de teste deste tamanho poderia distinguir os dois modelos.
+4. ⚖️ **O preço de trocar é alto e o ganho não é mensurável.** Promover exigiria re-tocar o teste
+   (lido **uma única vez**, com o registro versionado), refazer a auditoria de fairness, regravar o
+   baseline de drift dentro do artefato e reescrever a caracterização — tudo para servir um modelo
+   **não determinístico** (5 seeds = 5 modelos) e sem os 13 coeficientes que a LGPD Art. 20 torna
+   úteis.
+
+🎯 **E é isto que o teste de caracterização já impedia sem ter sido projetado para isso:**
+`|PR-AUC − ref| ≤ 1e-4` reprova qualquer troca de modelo, **inclusive uma que melhore o número**.
+A trava funcionou na primeira vez em que houve um candidato melhor — e o candidato apareceu de um
+experimento que existia para cumprir um requisito de enunciado.
+
+### Convergência
+
+**0 avisos de `ConvergenceWarning` em 300 ajustes** da grade, com `max_iter=800`. O default do
+sklearn é 200, e com ele parte das configurações pararia por **orçamento**, não por convergência —
+uma tabela em que um candidato foi interrompido no meio do treino mede o corte, não o modelo. O
+contador está no relatório do módulo de propósito: *um warning que ninguém lê é um warning que não
+existe*.
+
+### Decisão registrada
+
+| Campo | Valor |
+|---|---|
+| **Requisito atendido** | rede neural com `MLPClassifier` do scikit-learn, sob protocolo idêntico ao dos demais candidatos |
+| **Melhor configuração** | `hidden_layer_sizes=(8,)`, `alpha=0`, `early_stopping=False`, `max_iter=800` |
+| **Escolha da 1-SE** | `hidden_layer_sizes=()` — profundidade zero, pela segunda vez |
+| **Campeão** | **inalterado** (LogReg, 13 features) — motivos 1 a 4 acima |
+| **Toca o teste?** | **não.** Treino (CV) e validação apenas |
+| **Promove?** | **não.** `make promover` continua sendo o único caminho, e o gate continua decidindo |
+
+---
+
 ## 5e. Etapa 9 — pipeline serializado e API
 
 ### 9c · A promoção do artefato (17/08/2026)
@@ -3135,3 +3274,7 @@ foi avaliado?"* respondível em vez de presumida.
 | 2026-08-19 | 11 | **Só o campeão foi avaliado no teste** — os outros cinco finalistas, não | publicar a tabela dos seis no teste seria usá-lo para **comparar**, que é usá-lo para escolher com um passo de negação a mais. A comparação está feita, com número, nas §5b–5d, e no conjunto certo. O teste responde a uma pergunta só: *qual é o desempenho esperado do que vai para produção?* |
 | 2026-08-19 | 11 | A disciplina do toque único virou **mecanismo**, não intenção | `python -m src.reportar` não recalcula quando o registro existe (imprime o que foi medido); recalcular exige `--reexecutar`, que **confere** em vez de substituir (verificado: reproduz em todos os eixos); e um teste da suíte amarra o número publicado ao **sha256 do artefato promovido** ⇒ promover outro modelo sem re-tocar o teste deixa a suíte **vermelha**, em vez de deixar a documentação descrevendo um objeto que não existe mais |
 | 2026-08-19 | 11 | **Curva de ganho cumulativo com TRÊS linhas** (modelo · acaso · teto estrutural) como o gráfico principal da entrega | o teto `k/prevalência` é o que impede o gráfico de mentir: sem ele, um ranking a 75,9% do **máximo possível** parece fraco. E a curva não precisa de tradução — *"contatando 10% da base, a campanha alcança 28,6% de quem ia cancelar"* é frase que o negócio consome direto. Bônus do mesmo lote: histograma das probabilidades por classe verdadeira, que é o Brier em forma de figura |
+| 2026-08-25 | 8-bis | **`MLPClassifier` do scikit-learn rodado sob o protocolo idêntico** — o requisito do enunciado cumprido com número, não com justificativa | 20 configurações × 15 dobras. Melhor rede `(8,)` α=0: CV **0,6874** contra **0,6904** da LogReg. 🎯 A **1-SE elegeu `hidden=()` outra vez** — segunda implementação independente a desistir da profundidade pelo mesmo critério. 🔑 E o **gap treino−CV é monotônico na capacidade** (0,0033 → 0,0241 → 0,0499 → 0,0885): cada neurônio a mais foi inteiramente para dentro do treino |
+| 2026-08-25 | 8-bis | 🚨 **O custo do `early_stopping` que pontua por acurácia, medido** — a defesa do PyTorch deixou de ser leitura de código-fonte | mesma configuração, mesmas seeds, muda uma palavra-chave: PR-AUC **0,6846 → 0,6542** na CV (−0,0304, mais de um desvio entre folds), **0,6655 → 0,6378** na validação, Brier +0,0068, **+R$ 1.838/ciclo**. E o número que decidiu a parada está gravado no objeto: `best_validation_score_ = 0,8175` — **acurácia**, num problema cujo piso de acurácia é 73,46%. ⚠️ A terceira coluna é a que o fonte não dava: a **dispersão entre seeds triplica** (±0,0054 → ±0,0191), porque a época passa a ser escolhida por métrica de degrau sobre split aleatório |
+| 2026-08-25 | 8-bis | 🔑 **Réplica não planejada do achado nº 2 da Etapa 8**, com outra biblioteca | o controle de profundidade zero em Adam ficou **−0,0059** abaixo da LogReg em LBFGS — contra os **−0,0053** que a decomposição do terceiro modelo da Etapa 8 havia atribuído ao otimizador. *Duas implementações de Adam, equipes diferentes, mesmo preço em relação ao LBFGS*, com 0,0006 de distância. A decomposição era uma conta feita com um modelo construído para o fim; esta é uma medição independente |
+| 2026-08-25 | 8-bis | 🚨 **O candidato novo ficou marginalmente ACIMA do campeão na validação — e o campeão foi mantido** | `MLPClassifier (8,)`: PR-AUC **0,6655** × 0,6646, Brier −0,0009, custo −R$ 957, R@10% +0,005 — quatro métricas para o mesmo lado. Motivos de manter, todos numéricos: (a) na **CV**, que é onde a hierarquia da Etapa 0 manda selecionar, o campeão ganha (0,6904 × 0,6874); (b) o desvio entre as 5 seeds é **±0,0054, seis vezes** a diferença, e a seed 2024 sozinha deu 0,6586 — *qual dos dois ganha depende de qual inicialização for promovida*; (c) o IC95 do teste tem 0,1056 de largura, **117×** a diferença; (d) promover custaria re-tocar o teste, a auditoria de fairness, o baseline de drift e a caracterização, para servir um modelo **não determinístico** e sem os 13 coeficientes que o Art. 20 torna úteis. 🎯 *O teste de caracterização (±1e-4) barrou a troca na primeira vez em que houve um candidato melhor — e ele não foi projetado para isso* |

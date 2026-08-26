@@ -87,7 +87,7 @@ GitHub Actions · Docker
 
 ```bash
 make setup      # venv + versões travadas
-make ci         # lint + 133 testes + gate de promoção — o mesmo que o CI roda
+make ci         # lint + 140 testes + gate de promoção — o mesmo que o CI roda
 make promover   # grava models/campeao.joblib — só se passar no gate
 make artefato   # mostra o que está promovido (versão, sha256, features, limiar)
 make reportar   # Etapa 11 — a leitura ÚNICA do conjunto de teste (+ figuras)
@@ -98,7 +98,10 @@ make help       # todos os alvos
 ### A API
 
 **No ar:** https://tc-churn-api.onrender.com — a raiz leva à **documentação interativa**
-(`/docs`), gerada da OpenAPI. Rotas: `/health` · `/v1/predict` · `/v1/predict-batch`.
+(`/docs`), gerada da OpenAPI. Rotas: `/health` · `/predict` · `/v1/predict` · `/v1/predict-batch`.
+`/predict` e `/v1/predict` são **a mesma rota** (mesmo handler) em dois caminhos: o `/v1` é o
+canônico e é a estratégia de release declarada; o caminho sem versão existe porque é por ele que
+o integrador chama.
 
 ⚠️ Plano gratuito: o serviço **dorme após 15 min sem tráfego** e a primeira requisição depois
 disso leva cerca de um minuto. Acorde-o antes de demonstrar.
@@ -195,7 +198,7 @@ do processo é uma afirmação que alguém vai ler — aqui, uma máquina.*
 
 | Job | Faz | Falha quando |
 |---|---|---|
-| **QA** | `ruff check` + `pytest` (87 testes) | lint sujo ou qualquer teste vermelho |
+| **QA** | `ruff check` + `pytest` (140 testes) | lint sujo ou qualquer teste vermelho |
 | **Gate de promoção** | treina o modelo de referência e mede na **validação**, em **dois eixos** | PR-AUC < 0,66 **ou** Brier > 0,14 |
 
 Três decisões que valem a leitura, todas em `.github/workflows/ci.yml` e no decision log:
@@ -260,8 +263,9 @@ evento de **serviço**, não de drift. Detalhes e limitações em `docs/decision
 | 6 · Comparação de algoritmos | ✅ concluída — §5b · **empate técnico** entre LogReg, HGB e RF (0,07 dp) |
 | 7 · Tuning | ✅ concluída — §5c · **ganho zero**: o default da LogReg já era o pico da grade |
 | 8 · MLP em PyTorch | ✅ concluída — §5d · **a rede não superou** (0,6615 × 0,6646), e a regra 1-SE elegeu profundidade **zero** |
-| 9 · Pipeline serializado + API | ✅ **concluída (9c → 9f-quater)** — §5e · artefato promovido com identidade verificada na carga, API FastAPI de pé (`/health` · `/v1/predict` · `/v1/predict-batch`) e **imagem `linux/amd64` servindo o mesmo modelo** (PR-AUC idêntico nos 10 dígitos entre macOS e Linux, 0 decisões trocadas). **No ar em https://tc-churn-api.onrender.com**, com o deploy versionado em `render.yaml` e travado atrás do CI |
-| 9.5 · CI/CD | 🟡 **parcial por decisão** — QA + gate de dois eixos + caracterização rodando; o job de registro fica omitido, com os dois bloqueios comentados no YAML (`mlruns/` morre com o runner) |
+| 8-bis · MLPClassifier (sklearn) | ✅ **concluída** — §5d-bis · a rede **que o enunciado nomeia**, sob protocolo idêntico. A 1-SE elegeu **profundidade zero outra vez**, e o `early_stopping` que pontua por acurácia custou **−0,0304 de PR-AUC e +R$ 1.838/ciclo**, medido |
+| 9 · Pipeline serializado + API | ✅ **concluída (9c → 9f-quater)** — §5e · artefato promovido com identidade verificada na carga, API FastAPI de pé (`/health` · `/predict` · `/v1/predict` · `/v1/predict-batch`) e **imagem `linux/amd64` servindo o mesmo modelo** (PR-AUC idêntico nos 10 dígitos entre macOS e Linux, 0 decisões trocadas). **No ar em https://tc-churn-api.onrender.com**, com o deploy versionado em `render.yaml` e travado atrás do CI |
+| 9.5 · CI/CD | ✅ **concluída** — QA + gate de dois eixos + teste de caracterização rodando a cada push, com deploy travado atrás dos checks. O job de registro no Model Registry foi **deliberadamente omitido**, com os dois bloqueios escritos dentro do próprio YAML: `mlruns/` morre com o runner (exigiria backend persistente) e o artefato só passou a existir na Etapa 9. Escrevê-lo antes disso produziria um job que declara sucesso sem ter feito nada |
 | 10 · Monitoramento | ✅ **concluída** — §5f · log estruturado (10a), baseline de drift **dentro do artefato** (10a-2), **drift fabricado com detector verificado** (10c-bis), tabela das 4 famílias com limiar E ação (10b), política de retreino (10d) e rollback em duas camadas (10e) |
 | 10.5 · Governança e fairness | ✅ **concluída** — §5g · `MODEL_CARD.md` com pré-registro **commitado antes** da auditoria, e ela **achou**: 58,89 pp de disparidade de recall em `Dependents`, aceita e declarada com o preço das três saídas medido |
 | 11 · Documentação | ✅ **concluída** — [`docs/RELATORIO.md`](docs/RELATORIO.md) · §6b · **teste tocado uma única vez** (PR-AUC 0,6496, IC95 [0,5960; 0,7016]) · curva de ganho · seções 7 e 8 do decision log |

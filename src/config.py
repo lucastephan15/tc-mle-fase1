@@ -36,6 +36,14 @@ VERSAO_MODELO = "1.0.0"
 # a diferença pode ser só a partição que mudou.
 SEED = 42
 
+# As cinco inicializações dos experimentos com rede neural (Etapas 8 e 8-bis).
+# Mora aqui, e não no módulo do MLP, porque as duas implementações — PyTorch e
+# `MLPClassifier` — só são comparáveis se sortearem os mesmos pontos de partida.
+# Duas listas mantidas iguais pela memória de quem edita divergem em silêncio, e
+# a divergência apareceria como uma diferença entre bibliotecas que na verdade
+# seria diferença de sorteio.
+SEEDS = [42, 7, 123, 2024, 31337]
+
 # Partição 60/20/20. TRÊS conjuntos, não dois:
 #   treino     -> ajusta os parâmetros
 #   validação  -> seleção de modelo, early stopping do MLP, gate do CI

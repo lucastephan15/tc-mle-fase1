@@ -7,7 +7,7 @@
 .PHONY: help setup exige-venv lint test ci gate promover artefato api \
         monitorar simular-drift \
         docker-build docker-run docker-teste docker-limpar \
-        eda baseline comparacao finalistas tuning mlp limpar
+        eda baseline comparacao finalistas tuning mlp mlp-sklearn limpar
 
 # Os alvos usam os binários DO VENV, não os do shell. Motivo medido em 11/08/2026:
 # `make ci` fora do venv ativado pegava o ruff GLOBAL do sistema (0.6.4) em vez do
@@ -157,6 +157,11 @@ tuning:  ## Etapa 7 — grid (LogReg) + random search (HGB) com regra 1-SE
 
 mlp:  ## Etapa 8 — MLP em PyTorch (grade + 5 seeds + validação)
 	$(PY) -m src.mlp
+
+mlp-sklearn:  ## Etapa 8-bis — MLPClassifier do sklearn, mesmo protocolo (~70 s)
+	# A rede que o enunciado nomeia. Mede também o custo do `early_stopping` que
+	# pontua por acurácia — o motivo de a Etapa 8 ter sido escrita em PyTorch.
+	$(PY) -m src.mlp_sklearn
 
 limpar:  ## Remove caches e saídas derivadas (data/raw NUNCA é tocado)
 	rm -rf .pytest_cache .ruff_cache **/__pycache__ src/__pycache__ tests/__pycache__

@@ -234,6 +234,26 @@ def criar_app(artefato: art_mod.Artefato | None = None) -> FastAPI:
         """
         return _responder(request, p, [cliente])
 
+    @app.post("/predict", response_model=schema.PredicaoResponse, tags=["inferência"])
+    def predict_sem_versao(request: Request, cliente: Cliente, p: Servico):
+        """O mesmo que `/v1/predict`, no caminho SEM versão.
+
+        Existe porque `/predict` é o nome pelo qual o integrador (e o enunciado
+        da fase) chama esta rota, e uma API que responde 404 no caminho que a
+        especificação nomeia falha antes de o modelo ser consultado. O `/v1`
+        continua sendo o caminho canônico — é a estratégia de release declarada
+        na Etapa 10e (versionar o endpoint é a forma mais barata de absorver uma
+        mudança no conjunto de 13 features).
+
+        🔑 **Delega ao MESMO `_responder`, não a uma segunda implementação.** Um
+        alias que reimplementa a rota são duas definições do mesmo objeto
+        mantidas iguais pela memória de quem edita — e a divergência não falharia
+        em lugar nenhum, só devolveria número diferente no caminho que ninguém
+        testa. O teste que fixa isso compara as duas respostas campo a campo,
+        exceto o `request_id`, que é único por requisição **por construção**.
+        """
+        return _responder(request, p, [cliente])
+
     @app.post("/v1/predict-batch", response_model=schema.PredicaoResponse,
               tags=["inferência"])
     def predict_batch(request: Request, lote: Lote, p: Servico):

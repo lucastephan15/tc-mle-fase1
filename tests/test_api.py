@@ -204,6 +204,25 @@ def test_lote_e_unitario_concordam(cliente_real):
         assert p["decisao"] == um["decisao"]
 
 
+def test_predict_sem_versao_e_o_mesmo_endpoint(cliente_real):
+    """`/predict` e `/v1/predict` são a MESMA rota em dois caminhos.
+
+    O alias existe porque `/predict` é o caminho que a especificação da fase
+    nomeia; o `/v1` continua canônico. O que este teste protege não é a
+    existência da rota (um 404 seria óbvio) — é que ela não vire uma **segunda
+    implementação**: duas cópias mantidas iguais pela memória de quem edita
+    divergem em silêncio, e aqui a divergência sairia como probabilidade
+    diferente no caminho que ninguém exercita.
+
+    `request_id` é excluído da comparação por ser único por requisição — é o
+    único campo da resposta que DEVE diferir.
+    """
+    v1 = cliente_real.post("/v1/predict", json=BASE).json()
+    sem = cliente_real.post("/predict", json=BASE).json()
+    assert v1.pop("request_id") != sem.pop("request_id")
+    assert v1 == sem
+
+
 def test_lote_tem_teto_declarado(cliente_real):
     """Lista sem teto é o vetor de negação de serviço: o trabalho é síncrono."""
     r = cliente_real.post("/v1/predict-batch",
@@ -350,6 +369,7 @@ def test_openapi_publica_o_contrato(cliente_real):
     spec = cliente_real.get("/openapi.json").json()
     assert "/v1/predict" in spec["paths"]
     assert "/v1/predict-batch" in spec["paths"]
+    assert "/predict" in spec["paths"]
     assert "/health" in spec["paths"]
 
 

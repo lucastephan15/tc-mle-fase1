@@ -68,7 +68,7 @@ from src.tuning import comparar_pareado, envelopes, refit_1se
 # não-convexa e os pesos partem de inicialização aleatória, então o mesmo dado
 # produz modelos diferentes. Comparar uma média com um sorteio é comparar
 # réguas diferentes, e o vencedor pode ter sido decidido pelo sorteio.
-SEEDS = [42, 7, 123, 2024, 31337]
+SEEDS = config.SEEDS
 
 # A configuração que a regra 1-SE elegeu na Etapa 7, transcrita de
 # data/processed/etapa7_tuning.csv. É ela o adversário — não a configuração de
