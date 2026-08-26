@@ -894,8 +894,8 @@ isso a ação manda **confrontar as duas** (externo subindo com interno parado �
 modelo não conserta latitude).
 
 ⚠️ **A última linha da tabela é a que vale.** Preencher tráfego e saturação com número plausível é a
-forma mais fácil de transformar a seção de monitoramento em ficção — e a mais fácil de a banca
-detectar, porque ela pergunta de onde saiu o número.
+forma mais fácil de transformar a seção de monitoramento em ficção — e a mais fácil de um revisor
+detectar, porque a primeira pergunta sobre um limiar é de onde ele saiu.
 
 ### 10.5 Política de retreino
 

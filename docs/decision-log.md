@@ -1,15 +1,33 @@
 # Decision Log — Tech Challenge Fase 1 (Churn Telecom)
 
-> **Para que serve:** registrar *o que foi decidido, quais alternativas existiam e por quê*.
-> Não é diário de bordo — é a matéria-prima da documentação da entrega (onde está a maior
-> parte da nota). Regra: **decisão sem registro = decisão perdida**.
+> **O que é este documento.** O registro de *o que foi decidido, quais alternativas existiam e
+> por quê* — o que a literatura de comparação de modelos chama de **dossiê do processo** e o que
+> algumas empresas mantêm como **"registro de decisões"** anexo a cada modelo em produção. Ele foi
+> escrito **durante** a execução, decisão a decisão, nunca reconstruído no fim. Regra da casa:
+> *decisão sem registro é decisão perdida*, e todo número é rastreável até um run do MLflow.
 >
-> Preencher junto com a execução, nunca depois. Cada linha deve ser rastreável até um run
-> do MLflow quando envolver número.
+> ⚠️ **Não comece por aqui.** São ~3.300 linhas de evidência crua, incluindo os experimentos que
+> **não** deram certo — que estão aqui de propósito, porque um registro em que tudo funcionou é um
+> registro em que ninguém confia. A leitura principal é o
+> **[`RELATORIO.md`](RELATORIO.md)**; este documento é a prova de cada afirmação de lá.
 
-- **Entrega:** 01/09/2026 · **Modalidade:** solo · **Peso:** 0–60 pts
-- **Stack:** PyTorch (MLP) + scikit-learn + MLflow + FastAPI
-- **Runbook:** skill `tech-challenge` (`.claude/skills/tech-challenge/SKILL.md`)
+**Como navegar (3.300 linhas, 17 seções):**
+
+| Se você quer... | Vá para |
+|---|---|
+| entender **por que este problema** | §0 (enquadramento) e [`ML_CANVAS.md`](ML_CANVAS.md) |
+| ver **o que os dados diziam** | §1 (EDA) e [`../notebooks/01_eda.ipynb`](../notebooks/01_eda.ipynb) |
+| conferir **como o campeão foi escolhido** | §5b (algoritmos) · §5c (tuning) · §5d e §5d-bis (redes neurais) |
+| entender **a API e o container** | §5e |
+| ver **monitoramento e rollback** | §5f |
+| ver **a auditoria de fairness** | §5g |
+| ler **a leitura única do teste** | §6b |
+| passar os olhos em tudo | o **histórico cronológico** no fim — uma linha por decisão, em ordem |
+
+- **Entrega:** 01/09/2026 · **Modalidade:** individual
+- **Stack:** scikit-learn + PyTorch (MLP) + MLflow + FastAPI + Docker
+- **Método:** CRISP-DM, com gates de passagem por etapa e pré-registro das expectativas antes de
+  cada medição que pudesse ser lida das duas formas
 
 ---
 
@@ -1574,7 +1592,8 @@ com um caminho inexistente**, exigindo que o import passe e que `criar_app()` fa
 #### Escopo declarado (o que NÃO foi feito, e por quê)
 
 - **Sem autenticação** — limitação declarada na descrição da própria API e na documentação, não
-  omissão. A M04-A01 nomeia *"API interna sem proteção"* como anti-padrão, e a banca procura.
+  omissão. A literatura de APIs nomeia *"API interna sem proteção"* como anti-padrão — e é a primeira
+  coisa que uma revisão de segurança procura.
 - **`/docs` e `/openapi.json` abertos** — publicam 13 nomes de feature, 25 valores e 3 faixas.
   Não é dado pessoal: é a descrição do modelo. Mantidos por ser API interna; `openapi_url=None` é
   o que se faz quando a API sair da rede interna.
@@ -2542,7 +2561,7 @@ tráfego produzindo uma decisão de 100%.*
 os mecanismos existem, mas **um rollback real nunca foi executado** — não há versão ruim
 em produção para reverter, e fabricar uma para testar custaria um ciclo de deploy sem
 ninguém do outro lado para observar. É a linha 🟡 do checklist de manutenção: *rollback
-declarado, não testado*. Declará-lo assim vale mais que um ✅ que a banca não pode
+declarado, não testado*. Declará-lo assim vale mais que um ✅ que ninguém pode
 verificar — e é o mesmo critério pelo qual o gate, o healthcheck e o baseline **foram**
 verificados reprovando: quando o teste é possível, ele é obrigatório; quando não é, a
 ausência é escrita.
@@ -2735,7 +2754,7 @@ lida sozinha.
 
 #### 🚨 O gate de fairness NÃO barra o limite — e essa é a decisão, não um descuido
 
-A tentação era `assert disparidade <= 0.10` no CI, como a skill sugere. Aplicado
+A tentação era `assert disparidade <= 0.10` no CI, que é a recomendação padrão. Aplicado
 aqui, ele **reprovaria o modelo em produção a cada push**, e a saída óbvia seria
 afrouxar o número até o verde — que é exatamente a negociação *post hoc* que o
 pré-registro existe para impedir. Um gate que nasce sendo violado não protege
@@ -2779,7 +2798,7 @@ agora do lado do `git`. Refeito com cópia de segurança explícita.
 
 #### `MODEL_CARD.md` — o que o diferencia de um folheto
 
-Na raiz do repositório, versionado. Três propriedades que a skill exige e que a
+Na raiz do repositório, versionado. Três propriedades que o runbook do projeto exige e que a
 maioria dos cards não tem: **usos NÃO pretendidos** enumerados (6 itens, incluindo
 "não usar como evidência sobre um indivíduo"), **limite numérico de disparidade**
 escrito antes da medição, e **métricas com o piso ao lado** — nenhuma sozinha.
@@ -3137,7 +3156,7 @@ foi avaliado?"* respondível em vez de presumida.
 | 2026-08-10 | 4 | Ganho de feature medido por **CV no treino**, não na validação | julgar 4 candidatas olhando a validação a gastaria, do mesmo modo que decidir no teste o gastaria. E a CV entrega o desvio entre folds, sem o qual não se distingue ganho de sorteio |
 | 2026-08-10 | 4 | Ablação por **remoção**, não por adição isolada | adicionar sozinha superestima a contribuição de feature redundante; a pergunta certa é "agrega algo que as outras não dizem?" |
 | 2026-08-10 | 4 | **Nenhuma das 4 features entra no modelo v1** | ganho de +0,0003 contra desvio de 0,0280 na LogReg, e **−0,0067 na Random Forest**. Duas delas eram combinações lineares de dummies já presentes — redundantes por construção, não por acaso |
-| 2026-08-10 | 4 | Código das features **mantido**, ligável por `--features` | é evidência de método para a banca e permite reavaliação barata na Etapa 8 (MLP). Caminho de código coberto por 7 testes |
+| 2026-08-10 | 4 | Código das features **mantido**, ligável por `--features` | é evidência de método e permite reavaliação barata na Etapa 8 (MLP). Caminho de código coberto por 7 testes |
 | 2026-08-10 | 4 | Ignorar o ganho de +0,0067 que aparece **na validação** | uma observação contra cinco da CV; o valor cabe 4× dentro do desvio entre folds. É o caso-teste do "isso é sinal ou variância do split?" |
 | 2026-08-10 | 5 | Seleção por **ablação de feature original**, não por `SelectKBest`/`RFE` sobre as dummies | podar dummy não reduz custo de coleta: a coluna-mãe continua tendo de ser obtida, validada e monitorada. Os 3 métodos clássicos foram rodados e todos pioraram |
 | 2026-08-10 | 5 | **19 → 13 features**, removendo 6 | performance equivalente (0,6912 × 0,6868 na CV) com o **menor desvio entre folds** (0,0163). A justificativa é custo operacional e menos superfície de drift, não métrica — e está escrita assim |
