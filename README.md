@@ -40,6 +40,8 @@ de tudo isso, preenchido **durante** a execução, nunca depois.
 | documento | o que é |
 |---|---|
 | [`docs/RELATORIO.md`](docs/RELATORIO.md) | 📄 **a entrega** — leitura principal |
+| [`docs/ML_CANVAS.md`](docs/ML_CANVAS.md) | o enquadramento de negócio: stakeholders, economia do erro, métricas e pressupostos |
+| [`notebooks/01_eda.ipynb`](notebooks/01_eda.ipynb) | a EDA executada, com as figuras e o que cada achado decidiu |
 | [`MODEL_CARD.md`](MODEL_CARD.md) | uso pretendido, usos **proibidos**, fairness, LGPD |
 | [`docs/decision-log.md`](docs/decision-log.md) | o dossiê do processo, com o que não deu certo |
 | [`docs/resultado-teste-final.json`](docs/resultado-teste-final.json) | o registro da leitura única do teste |
@@ -60,9 +62,11 @@ data/raw/       ⛔ IMUTÁVEL — nenhum script escreve aqui
 data/processed/ tudo que é derivado (não versionado: reprodutível)
 models/         artefatos serializados (o Registry é a fonte de verdade)
 notebooks/      exploração — e SÓ exploração
+  01_eda.py       a FONTE, em formato percent (`# %%`) — é o que entra em diff
+  01_eda.ipynb    o derivado EXECUTADO (`make notebook`) — é o que se lê
 tests/          unitários + integração
 scripts/        integracao_container.py — a Etapa 9e, contra a imagem de pé
-docs/           decision log, model card
+docs/           relatório, ML Canvas, decision log, revisita
 Dockerfile      a receita; a IMAGEM é que é o artefato reprodutível
 .dockerignore   allowlist — o Docker NÃO lê o .gitignore
 .github/workflows/  CI/CD
@@ -71,8 +75,10 @@ Dockerfile      a receita; a IMAGEM é que é o artefato reprodutível
 **Duas regras que sustentam a estrutura:**
 1. **`data/raw` é read-only.** Sobrescrever o bruto destrói a reprodutibilidade de todo modelo
    anterior — não se pode reverter só o código, é preciso poder reverter os dados.
-2. **Notebook não é entregável.** Ele explora; `src/` produz. Lógica que só existe numa célula
-   não é testável, nem importável pelo CI, nem revisável.
+2. **Notebook explora; `src/` produz.** Lógica que só existe numa célula não é testável, nem
+   importável pelo CI, nem revisável — nenhuma linha de `notebooks/` é importada pelo pipeline.
+   O `01_eda.ipynb` é entregue **como leitura**, e sua fonte versionada é o `.py` em formato
+   percent: JSON de notebook é uma linha só, inmergeável, e muda de conteúdo a cada abertura.
 
 ---
 
@@ -91,6 +97,7 @@ make ci         # lint + 140 testes + gate de promoção — o mesmo que o CI ro
 make promover   # grava models/campeao.joblib — só se passar no gate
 make artefato   # mostra o que está promovido (versão, sha256, features, limiar)
 make reportar   # Etapa 11 — a leitura ÚNICA do conjunto de teste (+ figuras)
+make notebook   # regenera notebooks/01_eda.ipynb executado, a partir do .py
 make api        # sobe a API em http://localhost:8000 (docs em /docs)
 make help       # todos os alvos
 ```

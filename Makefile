@@ -7,7 +7,7 @@
 .PHONY: help setup exige-venv lint test ci gate promover artefato api \
         monitorar simular-drift \
         docker-build docker-run docker-teste docker-limpar \
-        eda baseline comparacao finalistas tuning mlp mlp-sklearn limpar
+        eda baseline comparacao finalistas tuning mlp mlp-sklearn notebook limpar
 
 # Os alvos usam os binários DO VENV, não os do shell. Motivo medido em 11/08/2026:
 # `make ci` fora do venv ativado pegava o ruff GLOBAL do sistema (0.6.4) em vez do
@@ -162,6 +162,13 @@ mlp-sklearn:  ## Etapa 8-bis — MLPClassifier do sklearn, mesmo protocolo (~70 
 	# A rede que o enunciado nomeia. Mede também o custo do `early_stopping` que
 	# pontua por acurácia — o motivo de a Etapa 8 ter sido escrita em PyTorch.
 	$(PY) -m src.mlp_sklearn
+
+notebook: exige-venv  ## Gera notebooks/01_eda.ipynb EXECUTADO a partir do .py
+	# A fonte é o `.py` em formato percent; o `.ipynb` é derivado e versionado por ser
+	# o entregável nomeado pelo enunciado. O caminho contrário (editar o .ipynb) devolve
+	# o problema que o percent resolve: JSON de uma linha só, inmergeável, com metadado
+	# de execução mudando a cada abertura.
+	cd notebooks && ../$(VENV)/bin/jupytext --to ipynb --execute 01_eda.py -o 01_eda.ipynb
 
 limpar:  ## Remove caches e saídas derivadas (data/raw NUNCA é tocado)
 	rm -rf .pytest_cache .ruff_cache **/__pycache__ src/__pycache__ tests/__pycache__

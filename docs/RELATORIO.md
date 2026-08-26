@@ -14,6 +14,8 @@ API em produção: **https://tc-churn-api.onrender.com** · Repositório: `tc-ml
 | **`docs/RELATORIO.md`** (este) | a narrativa completa: por que cada decisão foi tomada, com o número que a sustenta | leitura principal |
 | `README.md` | como rodar: comandos, endpoints, container, deploy | para reproduzir |
 | `MODEL_CARD.md` | ficha do modelo: uso pretendido, usos **proibidos**, fairness, LGPD | governança |
+| `docs/ML_CANVAS.md` | o enquadramento de negócio preenchido na Etapa 0: stakeholders, economia do erro, métricas com piso, pressupostos | para entender **por que este problema** |
+| `notebooks/01_eda.ipynb` | a EDA executada, com figuras — e a tabela do que cada achado decidiu | para ver os dados |
 | `docs/decision-log.md` | **o registro de decisões** — 3.000 linhas escritas *durante* a execução, com os experimentos que não deram certo | quando quiser a evidência crua de qualquer afirmação daqui |
 | `docs/resultado-teste-final.json` | o registro da leitura única do conjunto de teste | auditoria |
 

@@ -44,3 +44,18 @@ seaborn
 # qualidade
 pytest
 ruff
+
+# --- Autoria do notebook entregável (Etapa 1) ------------------------------
+# O enunciado nomeia "Notebook de EDA" como entregável, e a fonte versionada é o
+# `.py` em formato percent — JSON de notebook é inmergeável. Estas três produzem o
+# `.ipynb` executado a partir dele (`make notebook`):
+jupytext              # .py (percent) <-> .ipynb, sem perder as células
+nbclient              # executa o notebook de ponta a ponta
+nbconvert             # exigido pelo jupytext --execute (ele não o declara)
+ipykernel             # o kernel que roda as células
+# ⚠️ Ficam AQUI e não num quarto arquivo de dependências, e a decisão é declarada:
+# o que precisava ser isolado — o runtime da API — já está em `requirements-serve.in`,
+# que continua com 30 dists e SEM nada disto. Um `requirements-notebook.txt` separado
+# seria um arquivo a manter em sincronia para poupar 45 dists leves de um CI que já
+# instala o torch (529 MB) com cache. Mesmo estatuto do `ruff` e do `pytest`: ferramenta
+# de autoria/verificação, declarada onde as ferramentas do projeto são declaradas.
