@@ -66,7 +66,14 @@ notebooks/      exploração — e SÓ exploração
   01_eda.ipynb    o derivado EXECUTADO (`make notebook`) — é o que se lê
 tests/          unitários + integração
 scripts/        integracao_container.py — a Etapa 9e, contra a imagem de pé
-docs/           relatório, ML Canvas, decision log, revisita
+docs/           documentação da entrega — e o rastro de como ela foi decidida
+  RELATORIO.md    o relatório: resultado, comparação campeão × baseline, teste tocado 1x
+  ML_CANVAS.md    enquadramento do problema — stakeholders, métricas, premissas
+  decision-log.md POR QUE cada decisão foi tomada; o git diz o que mudou, este diz por quê
+  revisita.md     backlog DECLARADO — melhoria vista depois de uma etapa fechada não é
+                  refeita na hora, é anotada aqui com origem, etapa afetada e resultado
+                  quando executada (114 itens, 31 executados). É o mecanismo contra a
+                  refatoração perpétua: dívida com dono e endereço não é dívida esquecida
 Dockerfile      a receita; a IMAGEM é que é o artefato reprodutível
 .dockerignore   allowlist — o Docker NÃO lê o .gitignore
 .github/workflows/  CI/CD
@@ -276,3 +283,15 @@ evento de **serviço**, não de drift. Detalhes e limitações em `docs/decision
 | 10 · Monitoramento | ✅ **concluída** — §5f · log estruturado (10a), baseline de drift **dentro do artefato** (10a-2), **drift fabricado com detector verificado** (10c-bis), tabela das 4 famílias com limiar E ação (10b), política de retreino (10d) e rollback em duas camadas (10e) |
 | 10.5 · Governança e fairness | ✅ **concluída** — §5g · `MODEL_CARD.md` com pré-registro **commitado antes** da auditoria, e ela **achou**: 58,89 pp de disparidade de recall em `Dependents`, aceita e declarada com o preço das três saídas medido |
 | 11 · Documentação | ✅ **concluída** — [`docs/RELATORIO.md`](docs/RELATORIO.md) · §6b · **teste tocado uma única vez** (PR-AUC 0,6496, IC95 [0,5960; 0,7016]) · curva de ganho · seções 7 e 8 do decision log |
+
+---
+
+## Licença
+
+Código, notebooks e documentação deste repositório estão sob a **Licença MIT** — ver
+[`LICENSE`](LICENSE).
+
+O que **não** está coberto por ela: o dataset em `data/raw/`, que é o *Telco Customer
+Churn* da **IBM**, versionado aqui porque o `sha256` dele é o que amarra cada modelo ao
+snapshot exato do dado. A separação está escrita em [`NOTICE.md`](NOTICE.md), junto com
+as licenças de terceiros das dependências.
